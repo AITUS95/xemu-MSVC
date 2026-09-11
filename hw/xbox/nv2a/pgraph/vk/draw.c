@@ -1294,7 +1294,8 @@ static void push_vertex_attr_values(PGRAPHState *pg)
 static void bind_descriptor_sets(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
-    assert(r->descriptor_set_index >= 1);
+    assert(r->descriptor_set_binding >= 0);
+    assert(r->descriptor_set_binding < r->descriptor_set_index);
     assert(r->uniform_buffer_offsets_valid);
     assert(r->uniform_buffer_offsets[0] <= UINT32_MAX);
     assert(r->uniform_buffer_offsets[1] <= UINT32_MAX);
@@ -1306,7 +1307,7 @@ static void bind_descriptor_sets(PGRAPHState *pg)
 
     vkCmdBindDescriptorSets(r->command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
                             r->pipeline_binding->layout, 0, 1,
-                            &r->descriptor_sets[r->descriptor_set_index - 1],
+                            &r->descriptor_sets[r->descriptor_set_binding],
                             ARRAY_SIZE(dynamic_offsets), dynamic_offsets);
 }
 
@@ -1550,6 +1551,9 @@ void pgraph_vk_finish(PGRAPHState *pg, FinishReason finish_reason)
                                  VK_TRUE, UINT64_MAX));
 
         r->descriptor_set_index = 0;
+        r->descriptor_set_binding = -1;
+        memset(r->descriptor_cache_buckets, 0,
+               sizeof(r->descriptor_cache_buckets));
         r->uniform_buffer_offsets_valid = false;
         r->in_command_buffer = false;
         bitmap_clear(r->vertex_ram_in_use_bitmap, 0, r->bitmap_size);

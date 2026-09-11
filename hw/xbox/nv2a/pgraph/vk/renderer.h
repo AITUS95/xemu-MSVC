@@ -389,6 +389,10 @@ typedef struct PGRAPHVkState {
     VkDescriptorSet descriptor_sets[1024];
     DescriptorSetState descriptor_set_states[1024];
     int descriptor_set_index;
+    int descriptor_set_binding;
+    /* One-based slot links; zero terminates a bucket chain. */
+    unsigned int descriptor_cache_buckets[2048];
+    unsigned int descriptor_cache_next[1024];
 
     StorageBuffer storage_buffers[BUFFER_COUNT];
 

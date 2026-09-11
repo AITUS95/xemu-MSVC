@@ -125,6 +125,9 @@ static void create_descriptor_sets(PGRAPHState *pg)
     VK_CHECK(
         vkAllocateDescriptorSets(r->device, &alloc_info, r->descriptor_sets));
     memset(r->descriptor_set_states, 0, sizeof(r->descriptor_set_states));
+    r->descriptor_set_index = 0;
+    r->descriptor_set_binding = -1;
+    memset(r->descriptor_cache_buckets, 0, sizeof(r->descriptor_cache_buckets));
 }
 
 static void destroy_descriptor_sets(PGRAPHState *pg)
@@ -205,6 +208,43 @@ static bool descriptor_set_state_equal(const DescriptorSetState *a,
            memcmp(a->samplers, b->samplers, sizeof(a->samplers)) == 0;
 }
 
+static unsigned int descriptor_cache_bucket(PGRAPHVkState *r,
+                                            const DescriptorSetState *state)
+{
+    /* Hash only fields compared by descriptor_set_state_equal, not padding. */
+    uint64_t hash = fast_hash((const uint8_t *)state->uniform_ranges,
+                             sizeof(state->uniform_ranges));
+    hash ^= fast_hash((const uint8_t *)state->image_views,
+                     sizeof(state->image_views));
+    hash ^= fast_hash((const uint8_t *)state->samplers, sizeof(state->samplers));
+    return hash % ARRAY_SIZE(r->descriptor_cache_buckets);
+}
+
+static int find_cached_descriptor_set(PGRAPHVkState *r,
+                                     const DescriptorSetState *state)
+{
+    unsigned int bucket = descriptor_cache_bucket(r, state);
+    for (unsigned int link = r->descriptor_cache_buckets[bucket]; link;
+         link = r->descriptor_cache_next[link - 1]) {
+        unsigned int slot = link - 1;
+        assert(slot < r->descriptor_set_index);
+        if (descriptor_set_state_equal(&r->descriptor_set_states[slot], state)) {
+            return slot;
+        }
+    }
+    return -1;
+}
+
+static void cache_descriptor_set(PGRAPHVkState *r, unsigned int slot)
+{
+    assert(slot < r->descriptor_set_index);
+    unsigned int bucket =
+        descriptor_cache_bucket(r, &r->descriptor_set_states[slot]);
+    r->descriptor_cache_next[slot] = r->descriptor_cache_buckets[bucket];
+    r->descriptor_cache_buckets[bucket] = slot + 1;
+    r->descriptor_set_binding = slot;
+}
+
 void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
 {
     PGRAPHVkState *r = pg->vk_renderer_state;
@@ -220,16 +260,16 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
         !r->uniform_buffer_offsets_valid;
     bool need_descriptor_write =
         r->shader_bindings_changed || r->texture_bindings_changed ||
-        (r->descriptor_set_index == 0);
+        (r->descriptor_set_binding < 0);
 
     if (need_descriptor_write) {
         init_descriptor_set_state(r, layouts, &target_descriptor_state);
         target_descriptor_state_valid = true;
     }
 
-    if (need_descriptor_write && r->descriptor_set_index > 0 &&
+    if (need_descriptor_write && r->descriptor_set_binding >= 0 &&
         descriptor_set_state_equal(
-            &r->descriptor_set_states[r->descriptor_set_index - 1],
+            &r->descriptor_set_states[r->descriptor_set_binding],
             &target_descriptor_state)) {
         need_descriptor_write = false;
     }
@@ -249,8 +289,10 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
             ARRAY_SIZE(ubo_buffer_sizes),
             r->device_props.limits.minUniformBufferOffsetAlignment);
 
+    int cached_slot = need_descriptor_write ?
+        find_cached_descriptor_set(r, &target_descriptor_state) : -1;
     bool need_descriptor_write_reset =
-        need_descriptor_write &&
+        need_descriptor_write && cached_slot < 0 &&
         (r->descriptor_set_index >= ARRAY_SIZE(r->descriptor_sets));
 
     if (need_descriptor_write_reset || need_ubo_staging_buffer_reset) {
@@ -258,6 +300,7 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
         need_uniform_write = true;
         need_descriptor_write = true;
         target_descriptor_state_valid = false;
+        cached_slot = -1;
     }
 
     if (need_uniform_write) {
@@ -277,6 +320,15 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
         init_descriptor_set_state(r, layouts, &target_descriptor_state);
     }
 
+    /*
+     * Slots already used in this command buffer remain immutable. Rebind a
+     * matching set with this draw's current dynamic UBO offsets.
+     */
+    if (cached_slot >= 0) {
+        r->descriptor_set_binding = cached_slot;
+        return;
+    }
+
     assert(r->descriptor_set_index < ARRAY_SIZE(r->descriptor_sets));
 
     /*
@@ -287,7 +339,7 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
     if (descriptor_set_state_equal(
             &r->descriptor_set_states[r->descriptor_set_index],
             &target_descriptor_state)) {
-        r->descriptor_set_index++;
+        cache_descriptor_set(r, r->descriptor_set_index++);
         return;
     }
 
@@ -332,7 +384,7 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
     vkUpdateDescriptorSets(r->device, 6, descriptor_writes, 0, NULL);
 
     r->descriptor_set_states[r->descriptor_set_index] = target_descriptor_state;
-    r->descriptor_set_index++;
+    cache_descriptor_set(r, r->descriptor_set_index++);
 }
 
 static void update_shader_uniform_locs(ShaderBinding *binding)

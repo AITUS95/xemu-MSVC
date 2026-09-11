@@ -1591,6 +1591,20 @@ static void texture_cache_entry_init(Lru *lru, LruNode *node, const void *state)
 
 static void texture_cache_release_node_resources(PGRAPHVkState *r, TextureBinding *snode)
 {
+    /* Vulkan may recycle handle values. Do not retain a matching descriptor
+     * snapshot after its image view has been destroyed. */
+    for (int i = 0; i < ARRAY_SIZE(r->descriptor_set_states); i++) {
+        DescriptorSetState *state = &r->descriptor_set_states[i];
+        if (!state->valid) {
+            continue;
+        }
+        for (int j = 0; j < NV2A_MAX_TEXTURES; j++) {
+            if (state->image_views[j] == snode->image_view) {
+                state->valid = false;
+                break;
+            }
+        }
+    }
     vkDestroyImageView(r->device, snode->image_view, NULL);
     snode->image_view = VK_NULL_HANDLE;
 
@@ -1670,6 +1684,18 @@ static void sampler_cache_entry_init(Lru *lru, LruNode *node, const void *state)
 static void sampler_cache_release_node_resources(PGRAPHVkState *r,
                                                  TextureSamplerBinding *snode)
 {
+    for (int i = 0; i < ARRAY_SIZE(r->descriptor_set_states); i++) {
+        DescriptorSetState *state = &r->descriptor_set_states[i];
+        if (!state->valid) {
+            continue;
+        }
+        for (int j = 0; j < NV2A_MAX_TEXTURES; j++) {
+            if (state->samplers[j] == snode->sampler) {
+                state->valid = false;
+                break;
+            }
+        }
+    }
     vkDestroySampler(r->device, snode->sampler, NULL);
     snode->sampler = VK_NULL_HANDLE;
 }
