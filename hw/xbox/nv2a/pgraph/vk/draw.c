@@ -1909,9 +1909,14 @@ static void sync_vertex_ram_buffer(PGRAPHState *pg)
             pgraph_vk_update_vertex_ram_buffer(pg, addr, d->vram_ptr + addr,
                                                size);
         }
+    }
 
-        size_t start_bit = addr / TARGET_PAGE_SIZE;
-        size_t end_bit = TARGET_PAGE_ALIGN(addr + size) / TARGET_PAGE_SIZE;
+    /* A sync may finish the previous command buffer and clear its usage
+     * bitmap. Mark all pages for this draw only after every sync has finished. */
+    for (int i = 0; i < num_syncs; i++) {
+        size_t start_bit = merged[i].addr / TARGET_PAGE_SIZE;
+        size_t end_bit = TARGET_PAGE_ALIGN(merged[i].addr + merged[i].size) /
+                         TARGET_PAGE_SIZE;
         bitmap_set(r->vertex_ram_in_use_bitmap, start_bit,
                    end_bit - start_bit);
     }
