@@ -451,8 +451,13 @@ static bool check_texture_dirty(NV2AState *d, hwaddr addr, hwaddr size)
     hwaddr end = TARGET_PAGE_ALIGN(addr + size);
     addr &= TARGET_PAGE_MASK;
     assert(end < memory_region_size(d->vram));
-    return memory_region_test_and_clear_dirty(d->vram, addr, end - addr,
-                                              DIRTY_MEMORY_NV2A_TEX);
+    nv2a_profile_inc_counter(NV2A_PROF_TEX_DIRTY_PAGE_TEST);
+    bool dirty = memory_region_test_and_clear_dirty(d->vram, addr, end - addr,
+                                                   DIRTY_MEMORY_NV2A_TEX);
+    if (dirty) {
+        nv2a_profile_inc_counter(NV2A_PROF_TEX_DIRTY_PAGE_HIT);
+    }
+    return dirty;
 }
 
 // Check if any of the pages spanned by the a texture are dirty.
@@ -1385,6 +1390,7 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
         }
 
         if (can_reuse_current_binding) {
+            nv2a_profile_inc_counter(NV2A_PROF_TEX_BIND_REUSE);
             if (!sampler_found) {
                 bind_texture_sampler(pg, texture_idx, &sampler_key);
             }
@@ -1398,6 +1404,7 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
         // FIXME: Restructure to support rendering surfaces to cubemap faces
 
         // Writeback any surfaces which this texture may index
+        nv2a_profile_inc_counter(NV2A_PROF_TEX_SURFACE_SYNC_CHECK);
         pgraph_vk_download_surfaces_in_range_if_dirty(
             pg, texture_vram_offset, texture_length);
     }
@@ -1431,6 +1438,7 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
 
     uint64_t content_hash = 0;
     if (!surface_to_texture && possibly_dirty) {
+        nv2a_profile_inc_counter(NV2A_PROF_TEX_HASH);
         content_hash = fast_hash(texture_data, texture_length);
         if (is_indexed) {
             content_hash ^= fast_hash(palette_data, texture_palette_data_size);
@@ -1447,6 +1455,8 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
             if (possibly_dirty && content_hash != snode->hash) {
                 upload_texture_image(pg, texture_idx, snode);
                 snode->hash = content_hash;
+            } else if (possibly_dirty) {
+                nv2a_profile_inc_counter(NV2A_PROF_TEX_HASH_UNCHANGED);
             }
         }
         /* The dirty hint is sticky across texture bindings. Once the backing
@@ -1459,6 +1469,8 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
     }
 
     NV2A_VK_DPRINTF("Cache miss");
+
+    nv2a_profile_inc_counter(NV2A_PROF_TEX_CACHE_MISS);
 
     memcpy(&snode->key, &key, sizeof(key));
     snode->current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -1571,6 +1583,7 @@ static void update_timestamps(PGRAPHVkState *r)
 void pgraph_vk_bind_textures(NV2AState *d)
 {
     NV2A_VK_DGROUP_BEGIN("%s", __func__);
+    nv2a_profile_inc_counter(NV2A_PROF_TEX_BIND_CHECK);
 
     PGRAPHState *pg = &d->pgraph;
     PGRAPHVkState *r = pg->vk_renderer_state;
@@ -1581,6 +1594,7 @@ void pgraph_vk_bind_textures(NV2AState *d)
     r->texture_bindings_changed = false;
 
     if (!check_textures_dirty(pg)) {
+        nv2a_profile_inc_counter(NV2A_PROF_TEX_BIND_CLEAN);
         NV2A_VK_DPRINTF("Not dirty");
         NV2A_VK_DGROUP_END();
         update_timestamps(r);
