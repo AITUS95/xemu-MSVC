@@ -182,12 +182,22 @@ typedef struct ShaderModuleCacheEntry {
     ShaderModuleInfo *module_info;
 } ShaderModuleCacheEntry;
 
+typedef struct UniformCopyOp {
+    size_t src_offset;
+    size_t dst_offset;
+    size_t size;
+    size_t count;
+    size_t dst_stride;
+} UniformCopyOp;
+
 typedef struct ShaderBinding {
     LruNode node;
     ShaderState state;
     struct {
         ShaderModuleInfo *module_info;
         VshUniformLocs uniform_locs;
+        UniformCopyOp uniform_copies[VshUniform__COUNT];
+        size_t num_uniform_copies;
     } vsh;
     struct {
         ShaderModuleInfo *module_info;
@@ -195,6 +205,8 @@ typedef struct ShaderBinding {
     struct {
         ShaderModuleInfo *module_info;
         PshUniformLocs uniform_locs;
+        UniformCopyOp uniform_copies[PshUniform__COUNT];
+        size_t num_uniform_copies;
     } psh;
 } ShaderBinding;
 

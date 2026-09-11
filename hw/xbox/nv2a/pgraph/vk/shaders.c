@@ -387,6 +387,44 @@ void pgraph_vk_update_descriptor_sets(PGRAPHState *pg)
     cache_descriptor_set(r, r->descriptor_set_index++);
 }
 
+static size_t build_uniform_copy_plan(const ShaderUniformLayout *layout,
+                                      const UniformInfo *info, const int *locs,
+                                      size_t count, UniformCopyOp *ops)
+{
+    size_t num_ops = 0;
+    for (size_t i = 0; i < count; i++) {
+        if (locs[i] == -1) {
+            continue;
+        }
+        assert(locs[i] > 0 && locs[i] <= layout->num_uniforms);
+        const ShaderUniform *u = &layout->uniforms[locs[i] - 1];
+        size_t total_size = info[i].size * info[i].count;
+        size_t element_size = 4 * u->dim_v;
+        UniformCopyOp op = {
+            .src_offset = info[i].val_offs,
+            .dst_offset = u->offset,
+            .size = total_size,
+            .count = 1,
+        };
+        assert(total_size % 4 == 0);
+        if (u->dim_a > 1 && u->stride != element_size) {
+            assert(element_size && total_size % element_size == 0);
+            op.size = element_size;
+            op.count = total_size / element_size;
+            op.dst_stride = u->stride;
+            assert(op.count <= u->dim_a);
+        }
+        if (!total_size) {
+            continue;
+        }
+        assert(op.dst_offset <= layout->total_size);
+        assert((op.count - 1) * op.dst_stride + op.size <=
+               layout->total_size - op.dst_offset);
+        ops[num_ops++] = op;
+    }
+    return num_ops;
+}
+
 static void update_shader_uniform_locs(ShaderBinding *binding)
 {
     for (int i = 0; i < ARRAY_SIZE(binding->vsh.uniform_locs); i++) {
@@ -398,6 +436,14 @@ static void update_shader_uniform_locs(ShaderBinding *binding)
         binding->psh.uniform_locs[i] = uniform_index(
             &binding->psh.module_info->uniforms, PshUniformInfo[i].name);
     }
+    /* Rebuild when an LRU binding is initialized, while its reflected modules
+     * are referenced. Store offsets rather than pointers into shared layouts. */
+    binding->vsh.num_uniform_copies = build_uniform_copy_plan(
+        &binding->vsh.module_info->uniforms, VshUniformInfo,
+        binding->vsh.uniform_locs, VshUniform__COUNT, binding->vsh.uniform_copies);
+    binding->psh.num_uniform_copies = build_uniform_copy_plan(
+        &binding->psh.module_info->uniforms, PshUniformInfo,
+        binding->psh.uniform_locs, PshUniform__COUNT, binding->psh.uniform_copies);
 }
 
 static ShaderModuleInfo *
@@ -618,13 +664,17 @@ static ShaderState get_shader_state_for_vk(PGRAPHState *pg)
 }
 
 static void apply_uniform_updates(ShaderUniformLayout *layout,
-                                  const UniformInfo *info, int *locs,
-                                  void *values, size_t count)
+                                  const UniformCopyOp *ops, size_t count,
+                                  const void *values)
 {
-    for (int i = 0; i < count; i++) {
-        if (locs[i] != -1) {
-            uniform_copy(layout, locs[i], (char*)values + info[i].val_offs,
-                         4, (info[i].size * info[i].count) / 4);
+    for (size_t i = 0; i < count; i++) {
+        const UniformCopyOp *op = &ops[i];
+        const char *src = (const char *)values + op->src_offset;
+        char *dst = (char *)layout->allocation + op->dst_offset;
+        for (size_t j = 0; j < op->count; j++) {
+            memcpy(dst, src, op->size);
+            src += op->size;
+            dst += op->dst_stride;
         }
     }
 }
@@ -648,9 +698,9 @@ static void update_shader_uniforms(PGRAPHState *pg)
     VshUniformValues vsh_values;
     pgraph_glsl_set_vsh_uniform_values(pg, &binding->state.vsh,
                                   binding->vsh.uniform_locs, &vsh_values);
-    apply_uniform_updates(&binding->vsh.module_info->uniforms, VshUniformInfo,
-                          binding->vsh.uniform_locs, &vsh_values,
-                          VshUniform__COUNT);
+    apply_uniform_updates(&binding->vsh.module_info->uniforms,
+                          binding->vsh.uniform_copies,
+                          binding->vsh.num_uniform_copies, &vsh_values);
 
     PshUniformValues psh_values;
     pgraph_glsl_set_psh_uniform_values(pg, binding->psh.uniform_locs,
@@ -661,9 +711,9 @@ static void update_shader_uniforms(PGRAPHState *pg)
 
         psh_values.texScale[i] = scale;
     }
-    apply_uniform_updates(&binding->psh.module_info->uniforms, PshUniformInfo,
-                          binding->psh.uniform_locs, &psh_values,
-                          PshUniform__COUNT);
+    apply_uniform_updates(&binding->psh.module_info->uniforms,
+                          binding->psh.uniform_copies,
+                          binding->psh.num_uniform_copies, &psh_values);
 
     r->uniforms_changed = true;
     nv2a_profile_inc_counter(NV2A_PROF_SHADER_UBO_DIRTY);
