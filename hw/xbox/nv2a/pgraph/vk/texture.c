@@ -1247,31 +1247,73 @@ static bool current_texture_sampler_matches(PGRAPHVkState *r,
            !memcmp(&binding->key, key, sizeof(*key));
 }
 
+static TexturePreparationState *prepare_texture_state(PGRAPHState *pg,
+                                                      int texture_idx)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    TexturePreparationState *prepared = &r->texture_preparation[texture_idx];
+    uint32_t offset = texture_idx * 4;
+    uint32_t shape_regs[] = {
+        pgraph_reg_r(pg, NV_PGRAPH_TEXCTL0_0 + offset),
+        pgraph_reg_r(pg, NV_PGRAPH_TEXCTL1_0 + offset),
+        pgraph_reg_r(pg, NV_PGRAPH_TEXFMT0 + offset),
+        pgraph_reg_r(pg, NV_PGRAPH_TEXIMAGERECT0 + offset),
+        (pgraph_reg_r(pg, NV_PGRAPH_SHADERPROG) >> (texture_idx * 5)) & 0x1f,
+    };
+    uint32_t sampler_regs[] = {
+        pgraph_reg_r(pg, NV_PGRAPH_TEXFILTER0 + offset),
+        pgraph_reg_r(pg, NV_PGRAPH_TEXADDRESS0 + offset),
+        pgraph_reg_r(pg, NV_PGRAPH_BORDERCOLOR0 + offset),
+        shape_regs[0],
+    };
+    QEMU_BUILD_BUG_ON(sizeof(shape_regs) != sizeof(prepared->shape_regs));
+    QEMU_BUILD_BUG_ON(sizeof(sampler_regs) != sizeof(prepared->sampler_regs));
+
+    /* Compare register values rather than shared dirty bits: unrelated slots
+     * and repeated writes can enter this path without changing this state. */
+    bool shape_changed = !prepared->valid ||
+        memcmp(shape_regs, prepared->shape_regs, sizeof(shape_regs));
+    if (shape_changed) {
+        prepared->shape = pgraph_get_texture_shape(pg, texture_idx);
+        prepared->length = pgraph_get_texture_length(pg, &prepared->shape);
+        memcpy(prepared->shape_regs, shape_regs, sizeof(shape_regs));
+    }
+
+    if (shape_changed ||
+        memcmp(sampler_regs, prepared->sampler_regs, sizeof(sampler_regs))) {
+        TextureSamplerKey *key = &prepared->sampler_key;
+        memset(key, 0, sizeof(*key));
+        key->state = prepared->shape;
+        key->filter = sampler_regs[0];
+        key->address = sampler_regs[1];
+        key->border_color = sampler_regs[2];
+        key->max_anisotropy =
+            1 << GET_MASK(sampler_regs[3], NV_PGRAPH_TEXCTL0_0_MAX_ANISOTROPY);
+        memcpy(prepared->sampler_regs, sampler_regs, sizeof(sampler_regs));
+    }
+    prepared->valid = true;
+    return prepared;
+}
+
 static void create_texture(PGRAPHState *pg, int texture_idx)
 {
     NV2A_VK_DGROUP_BEGIN("Creating texture %d", texture_idx);
 
     NV2AState *d = container_of(pg, NV2AState, pgraph);
     PGRAPHVkState *r = pg->vk_renderer_state;
-    TextureShape state = pgraph_get_texture_shape(pg, texture_idx); // FIXME: Check for pad issues
+    TexturePreparationState *prepared = prepare_texture_state(pg, texture_idx);
+    TextureShape state = prepared->shape;
     BasicColorFormatInfo f_basic = kelvin_color_format_info_map[state.color_format];
 
+    /* DMA objects may change independently of texture registers. Resolve all
+     * addresses again, and retain the surface and memory checks below. */
     const hwaddr texture_vram_offset = pgraph_get_texture_phys_addr(pg, texture_idx);
-    size_t texture_length = pgraph_get_texture_length(pg, &state);
+    size_t texture_length = prepared->length;
     hwaddr texture_palette_vram_offset = 0;
     size_t texture_palette_data_size = 0;
 
-    uint32_t filter =
-        pgraph_reg_r(pg, NV_PGRAPH_TEXFILTER0 + texture_idx * 4);
-    uint32_t address =
-        pgraph_reg_r(pg, NV_PGRAPH_TEXADDRESS0 + texture_idx * 4);
-    uint32_t border_color_pack32 =
-        pgraph_reg_r(pg, NV_PGRAPH_BORDERCOLOR0 + texture_idx * 4);
     bool is_indexed = (state.color_format ==
             NV097_SET_TEXTURE_FORMAT_COLOR_SZ_I8_A8R8G8B8);
-    uint32_t max_anisotropy =
-        1 << (GET_MASK(pgraph_reg_r(pg, NV_PGRAPH_TEXCTL0_0 + texture_idx*4),
-                       NV_PGRAPH_TEXCTL0_0_MAX_ANISOTROPY));
 
     TextureKey key;
     memset(&key, 0, sizeof(key));
@@ -1288,12 +1330,7 @@ static void create_texture(PGRAPHState *pg, int texture_idx)
     key.scale = 1;
 
     TextureSamplerKey sampler_key;
-    memset(&sampler_key, 0, sizeof(sampler_key));
-    sampler_key.state = state;
-    sampler_key.filter = filter;
-    sampler_key.address = address;
-    sampler_key.border_color = border_color_pack32;
-    sampler_key.max_anisotropy = max_anisotropy;
+    memcpy(&sampler_key, &prepared->sampler_key, sizeof(sampler_key));
 
     bool possibly_dirty = false;
     bool possibly_dirty_checked = false;

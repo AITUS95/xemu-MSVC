@@ -242,6 +242,15 @@ typedef struct TextureSamplerKey {
     uint32_t max_anisotropy;
 } TextureSamplerKey;
 
+typedef struct TexturePreparationState {
+    uint32_t shape_regs[5];
+    uint32_t sampler_regs[4];
+    TextureShape shape;
+    size_t length;
+    TextureSamplerKey sampler_key;
+    bool valid;
+} TexturePreparationState;
+
 typedef struct TextureSamplerBinding {
     LruNode node;
     TextureSamplerKey key;
@@ -435,6 +444,7 @@ typedef struct PGRAPHVkState {
     Lru texture_cache;
     TextureBinding *texture_cache_entries;
     TextureBinding *texture_bindings[NV2A_MAX_TEXTURES];
+    TexturePreparationState texture_preparation[NV2A_MAX_TEXTURES];
     TextureBinding dummy_texture;
     Lru texture_sampler_cache;
     TextureSamplerBinding *texture_sampler_cache_entries;
