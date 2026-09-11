@@ -663,6 +663,36 @@ static ShaderState get_shader_state_for_vk(PGRAPHState *pg)
     return state;
 }
 
+static bool shader_state_dirty_for_vk(PGRAPHState *pg)
+{
+    PGRAPHVkState *r = pg->vk_renderer_state;
+    if (!r->shader_binding) {
+        return true;
+    }
+
+    const ShaderState *state = &r->shader_binding->state;
+    if (pgraph_glsl_check_shader_state_dirty(pg, state)) {
+        return true;
+    }
+
+    /* These inputs can change without setting a PGRAPH register dirty bit.
+     * Compare float representations, as the shader cache key does. */
+    if (memcmp(&pg->specular_power, &state->vsh.specular_power,
+               sizeof(pg->specular_power)) ||
+        memcmp(&pg->specular_power_back, &state->vsh.specular_power_back,
+               sizeof(pg->specular_power_back)) ||
+        (state->vsh.point_params_enable &&
+         memcmp(pg->point_params, state->vsh.point_params,
+                sizeof(state->vsh.point_params)))) {
+        return true;
+    }
+
+    /* Texture bindings are resolved before shader selection. A surface-backed
+     * texture can change the pixel center bias without a register write. */
+    return state->vsh.apply_scaled_pixel_center_bias !=
+           !samples_scaled_surface_texture(r);
+}
+
 static void apply_uniform_updates(ShaderUniformLayout *layout,
                                   const UniformCopyOp *ops, size_t count,
                                   const void *values)
@@ -729,12 +759,15 @@ void pgraph_vk_bind_shaders(PGRAPHState *pg)
 
     r->shader_bindings_changed = false;
 
-    ShaderState new_state = get_shader_state_for_vk(pg);
-    if (!r->shader_binding || memcmp(&r->shader_binding->state, &new_state,
-                                     sizeof(ShaderState))) {
-        r->shader_binding = get_shader_binding_for_state(r, &new_state);
-        r->shader_bindings_changed = true;
-    } else {
+    if (shader_state_dirty_for_vk(pg)) {
+        ShaderState new_state = get_shader_state_for_vk(pg);
+        if (!r->shader_binding || memcmp(&r->shader_binding->state, &new_state,
+                                         sizeof(ShaderState))) {
+            r->shader_binding = get_shader_binding_for_state(r, &new_state);
+            r->shader_bindings_changed = true;
+        }
+    }
+    if (!r->shader_bindings_changed) {
         nv2a_profile_inc_counter(NV2A_PROF_SHADER_BIND_NOTDIRTY);
     }
 
