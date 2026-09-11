@@ -20,7 +20,8 @@ env:
 jobs:
   build-image:
     name: Build and Publish Image
-    if: ${{ github.repository_owner == 'xemu-project' }}
+    # The MSVC Profile build uses vcpkg, not the cross-compilation image.
+    if: ${{ false }}
     runs-on: ubuntu-latest
     strategy:
       matrix:

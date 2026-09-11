@@ -12,13 +12,15 @@ jobs:
 
   update_website:
     name: Update website
-    if: ${{ github.repository_owner == 'xemu-project' && !github.event.release.prerelease }}
+    # MSVC Profile releases do not provide the cross-platform asset set.
+    if: ${{ false }}
     uses: ./.github/workflows/update-website.yml
     secrets: inherit
 
   update_ppa_snapshot:
     name: Update PPA snapshot
-    if: ${{ !github.event.release.prerelease }}
+    # MSVC Profile releases do not include a source package for Launchpad.
+    if: ${{ false }}
     uses: ./.github/workflows/update-ppa.yml
     with:
       release: ${{ github.event.release.name }}

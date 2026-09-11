@@ -33,27 +33,18 @@ jobs:
       ref: ${{ inputs.ref }}
       pkg_version: ${{ inputs.pkg_version }}
 
-  msvc:
-    name: Windows MSVC
-    needs: build
-    uses: ./.github/workflows/windows-msvc.yml
-    with:
-      ref: ${{ inputs.ref }}
-      pkg_version: ${{ needs.build.outputs.pkg_version }}
-
   delete_prerelease:
     name: Delete pre-release
-    needs: [build, msvc]
+    needs: build
     if: ${{ inputs.pre-release }}
     uses: ./.github/workflows/delete-prerelease.yml
 
   release:
     name: Create release
     runs-on: ubuntu-latest
-    needs: [build, msvc, delete_prerelease]
+    needs: [build, delete_prerelease]
     if: >-
       ${{ always() && needs.build.result == 'success' &&
-      needs.msvc.result == 'success' &&
       (needs.delete_prerelease.result == 'success' ||
       needs.delete_prerelease.result == 'skipped') }}
     steps:
@@ -69,37 +60,14 @@ jobs:
     - name: Download artifacts
       uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v4
       with:
+        name: xemu-msvc-profile.zip
         path: dist
-        merge-multiple: true
-    - name: Filter release assets
-      run: |
-        find dist -type f -name '*.tgz' -delete
-        find dist -type f \( \
-          -name '*-macos-arm64-unsigned.zip' -o \
-          -name '*-macos-x86_64-unsigned.zip' \
-        \) -delete
-        if [ "${{ inputs.pre-release }}" != "true" ]; then
-          rm -f dist/xemu-msvc-debug.zip dist/xemu-msvc-profile.zip
-          cp "dist/xemu-${{ needs.build.outputs.pkg_version }}-macos-universal-unsigned.zip" \
-             "dist/xemu-${{ needs.build.outputs.pkg_version }}-macos-universal.zip"
-        fi
-    - name: Add transitionary package aliases
-      if: ${{ !inputs.pre-release }}
-      run: |
-        pushd dist
-        cp xemu-${{ needs.build.outputs.pkg_version }}-windows-x86_64.zip xemu-win-x86_64-release.zip
-        cp xemu-${{ needs.build.outputs.pkg_version }}-windows-arm64.zip xemu-win-aarch64-release.zip
     - name: Normalize MSVC asset names
       env:
         PKG_VERSION: ${{ needs.build.outputs.pkg_version }}
       run: |
         set -euo pipefail
-        for config in release profile debug; do
-          source="dist/xemu-msvc-${config}.zip"
-          if [ -f "$source" ]; then
-            mv "$source" "dist/xemu-${PKG_VERSION}-msvc-${config}.zip"
-          fi
-        done
+        mv dist/xemu-msvc-profile.zip "dist/xemu-${PKG_VERSION}-msvc-profile.zip"
 
     - name: Create release
       uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -112,11 +80,8 @@ jobs:
         prerelease: ${{ inputs.pre-release }}
         make_latest: false
         files: |
-          dist/xemu*.tar.zst
-          dist/xemu*-win*.zip
-          dist/xemu*-macos-universal*.zip
-          dist/xemu*.AppImage
-          dist/xemu*-msvc-*.zip
+          dist/xemu*-msvc-profile.zip
+        fail_on_unmatched_files: true
 
     - name: Keep stable release below development build
       if: ${{ inputs.pre-release }}
