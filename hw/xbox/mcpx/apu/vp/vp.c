@@ -20,6 +20,7 @@
  */
 
 #include "hw/xbox/mcpx/apu/apu_int.h"
+#include "qemu/rcu.h"
 #include "adpcm.h"
 
 #define DEFAULT_VOICE_WORKERS 2
@@ -1610,8 +1611,14 @@ static void *voice_worker_thread(void *arg)
                 memset(self->sample_buf, 0, sizeof(self->sample_buf));
             }
             for (int i = 0; i < self->queue_len; i++) {
+                /*
+                 * Amortize the physical accessors' RCU barriers over one
+                 * voice.  End the section before taking the dispatch lock.
+                 */
+                struct rcu_reader_data *reader = rcu_read_lock_ptr();
                 voice_process(d, self->mixbins, self->sample_buf,
                               self->queue[i].voice, self->queue[i].list);
+                rcu_read_unlock_ptr(reader);
             }
 
             qemu_mutex_lock(&vwd->lock);
@@ -1664,7 +1671,10 @@ static void voice_work_dispatch_inline(MCPXAPUState *d,
                                        VoiceWorkItem item)
 {
     g_dbg.vp.workers[0].num_voices = 1;
+    /* Match the worker path, including voice_process's early returns. */
+    struct rcu_reader_data *reader = rcu_read_lock_ptr();
     voice_process(d, mixbins, d->vp.sample_buf, item.voice, item.list);
+    rcu_read_unlock_ptr(reader);
 }
 
 static void voice_work_enqueue(MCPXAPUState *d, int v, int list)
@@ -1687,7 +1697,9 @@ static void voice_work_schedule(MCPXAPUState *d)
 
     for (int i = 0; i < vwd->queue_len; i++) {
         uint32_t src, dst, clr;
+        struct rcu_reader_data *reader = rcu_read_lock_ptr();
         get_voice_bin_src_dst(d, vwd->queue[i].voice, &src, &dst, &clr);
+        rcu_read_unlock_ptr(reader);
 
         // TODO: To simplify submix scheduling, we make a few assumptions based
         // on Xbox software observations. However, the configurability of
@@ -1867,10 +1879,17 @@ void mcpx_apu_vp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_P
             }
 
             uint16_t v = d->regs[current];
+            /*
+             * Keep the two live register reads in one RCU section, without
+             * extending it across FE methods or worker dispatch/waits.
+             */
+            struct rcu_reader_data *reader = rcu_read_lock_ptr();
             d->regs[next] = voice_get_mask(d, v, NV_PAVS_VOICE_TAR_PITCH_LINK,
                                NV_PAVS_VOICE_TAR_PITCH_LINK_NEXT_VOICE_HANDLE);
-            if (!voice_get_mask(d, v, NV_PAVS_VOICE_PAR_STATE,
-                                NV_PAVS_VOICE_PAR_STATE_ACTIVE_VOICE)) {
+            bool active = voice_get_mask(d, v, NV_PAVS_VOICE_PAR_STATE,
+                                        NV_PAVS_VOICE_PAR_STATE_ACTIVE_VOICE);
+            rcu_read_unlock_ptr(reader);
+            if (!active) {
                 fe_method(d, SE2FE_IDLE_VOICE, v);
             } else {
                 voice_work_enqueue(d, v, list);
