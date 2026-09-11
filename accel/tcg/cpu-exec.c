@@ -52,6 +52,60 @@
 #define XBOX_TCG_DIRECT_TB_STATE 1
 #endif
 
+#ifdef XBOX_TCG_DIRECT_TB_STATE
+static __thread struct {
+    bool enabled;
+    int64_t start_ns, report_ns;
+    uint64_t entries, exits[TB_EXIT_MASK + 1];
+    uint64_t lookups, jump_misses, table_misses;
+    uint64_t generated, chain_attempts;
+} xbox_tcg_stats;
+
+#define XBOX_TCG_COUNT(field) do { \
+    if (unlikely(xbox_tcg_stats.enabled)) { \
+        xbox_tcg_stats.field++; \
+    } \
+} while (0)
+
+static void xbox_tcg_stats_enter(void)
+{
+    bool enabled =
+        trace_event_get_state_backends(TRACE_XEMU_TCG_EXEC_STATS) ||
+        trace_event_get_state_backends(TRACE_XEMU_TCG_LOOKUP_STATS);
+    if (enabled && !xbox_tcg_stats.enabled) {
+        memset(&xbox_tcg_stats, 0, sizeof(xbox_tcg_stats));
+        xbox_tcg_stats.start_ns = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+        xbox_tcg_stats.report_ns = xbox_tcg_stats.start_ns;
+    }
+    xbox_tcg_stats.enabled = enabled;
+}
+
+static void xbox_tcg_stats_report(CPUState *cpu)
+{
+    if (!xbox_tcg_stats.enabled) {
+        return;
+    }
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+    if (now - xbox_tcg_stats.report_ns < NANOSECONDS_PER_SECOND) {
+        return;
+    }
+    /* Cumulative per-vCPU-thread counts, sampled at a cpu_exec boundary.
+     * Longjmp exits bypass the normal TB return counters. */
+    trace_xemu_tcg_exec_stats(
+        cpu->cpu_index, now - xbox_tcg_stats.start_ns,
+        xbox_tcg_stats.entries, xbox_tcg_stats.exits[TB_EXIT_IDX0],
+        xbox_tcg_stats.exits[TB_EXIT_IDX1],
+        xbox_tcg_stats.exits[TB_EXIT_REQUESTED], xbox_tcg_stats.exits[2]);
+    trace_xemu_tcg_lookup_stats(
+        cpu->cpu_index, xbox_tcg_stats.lookups, xbox_tcg_stats.jump_misses,
+        xbox_tcg_stats.table_misses, xbox_tcg_stats.generated,
+        xbox_tcg_stats.chain_attempts);
+    xbox_tcg_stats.report_ns = now;
+}
+#else
+#define XBOX_TCG_COUNT(field) do { } while (0)
+#endif
+
 /* -icount align implementation. */
 
 typedef struct SyncClocks {
@@ -607,6 +661,7 @@ xbox_lookup_tb_ptr_miss(CPUState *cpu, vaddr pc, uint64_t cs_base,
                         uint64_t addr_tag, uint64_t state_tag,
                         uint32_t hash)
 {
+    XBOX_TCG_COUNT(jump_misses);
     uint32_t flags = state_tag;
     uint32_t cflags = state_tag >> 32;
     TCGTBCPUState s = {
@@ -619,6 +674,8 @@ xbox_lookup_tb_ptr_miss(CPUState *cpu, vaddr pc, uint64_t cs_base,
 
     if (tb != NULL) {
         tb_jmp_cache_store_addr_tag(cpu, hash, addr_tag, state_tag, tb);
+    } else {
+        XBOX_TCG_COUNT(table_misses);
     }
     return tb;
 }
@@ -663,6 +720,7 @@ xbox_lookup_tb_ptr_breakpoints(CPUState *cpu, vaddr pc, uint64_t cs_base,
  */
 const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
 {
+    XBOX_TCG_COUNT(lookups);
     CPUState *cpu = env_cpu(env);
     TranslationBlock *tb;
 
@@ -771,6 +829,7 @@ cpu_tb_exec(CPUState *cpu, TranslationBlock *itb, int *tb_exit)
     }
 
     qemu_thread_jit_execute();
+    XBOX_TCG_COUNT(entries);
     ret = tcg_qemu_tb_exec(cpu_env(cpu), tb_ptr);
     cpu->neg.can_do_io = true;
     qemu_plugin_disable_mem_helpers(cpu);
@@ -784,6 +843,7 @@ cpu_tb_exec(CPUState *cpu, TranslationBlock *itb, int *tb_exit)
      */
     last_tb = tcg_splitwx_to_rw((void *)(ret & ~TB_EXIT_MASK));
     *tb_exit = ret & TB_EXIT_MASK;
+    XBOX_TCG_COUNT(exits[*tb_exit]);
 
     trace_exec_tb_exit(last_tb, *tb_exit);
 
@@ -1343,6 +1403,7 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
 
                 mmap_lock();
                 tb = tb_gen_code(cpu, s);
+                XBOX_TCG_COUNT(generated);
                 mmap_unlock();
 
                 /*
@@ -1368,6 +1429,7 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
 #endif
             /* See if we can patch the calling TB. */
             if (last_tb) {
+                XBOX_TCG_COUNT(chain_attempts);
                 tb_add_jump(last_tb, tb_exit, tb);
             }
 
@@ -1400,6 +1462,10 @@ int cpu_exec(CPUState *cpu)
     int ret;
     SyncClocks sc = { 0 };
 
+#ifdef XBOX_TCG_DIRECT_TB_STATE
+    xbox_tcg_stats_enter();
+#endif
+
     /* replay_interrupt may need current_cpu */
     current_cpu = cpu;
 
@@ -1428,6 +1494,9 @@ int cpu_exec(CPUState *cpu)
 #endif
 
     cpu_exec_exit(cpu);
+#ifdef XBOX_TCG_DIRECT_TB_STATE
+    xbox_tcg_stats_report(cpu);
+#endif
     return ret;
 }
 

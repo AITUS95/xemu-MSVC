@@ -5,6 +5,8 @@
 exec_tb(void *tb, uintptr_t pc) "tb:%p pc=0x%"PRIxPTR
 exec_tb_nocache(void *tb, uintptr_t pc) "tb:%p pc=0x%"PRIxPTR
 exec_tb_exit(void *last_tb, unsigned int flags) "tb:%p flags=0x%x"
+xemu_tcg_exec_stats(int cpu, uint64_t elapsed_ns, uint64_t entries, uint64_t exit0, uint64_t exit1, uint64_t requested, uint64_t other) "cpu=%d elapsed_ns=%"PRIu64" entries=%"PRIu64" exit0=%"PRIu64" exit1=%"PRIu64" requested=%"PRIu64" other=%"PRIu64
+xemu_tcg_lookup_stats(int cpu, uint64_t lookups, uint64_t jump_misses, uint64_t table_misses, uint64_t generated, uint64_t chain_attempts) "cpu=%d lookups=%"PRIu64" jump_misses=%"PRIu64" table_misses=%"PRIu64" generated=%"PRIu64" chain_attempts=%"PRIu64
 
 # cputlb.c
 memory_notdirty_write_access(uint64_t vaddr, uint64_t ram_addr, unsigned size) "0x%" PRIx64 " ram_addr 0x%" PRIx64 " size %u"
