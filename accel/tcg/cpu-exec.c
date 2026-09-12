@@ -61,6 +61,63 @@ static __thread struct {
     uint64_t generated, chain_attempts;
 } xbox_tcg_stats;
 
+static __thread struct {
+    bool enabled;
+    uint64_t returns, samples, dropped, no_tb;
+    uint64_t linked, invalid, occupied, two_pages, no_previous;
+    struct {
+        uint64_t pc, cs_base, count;
+        uint32_t cflags;
+        unsigned exit;
+        bool patchable, entry_pc;
+    } slots[256];
+} xbox_tcg_detail;
+
+#define XBOX_TCG_DETAIL_COUNT(field) do { \
+    if (unlikely(xbox_tcg_detail.enabled)) { \
+        xbox_tcg_detail.field++; \
+    } \
+} while (0)
+
+static void xbox_tcg_sample_return(TranslationBlock *tb, TranslationBlock *itb,
+                                   unsigned exit)
+{
+    if (!xbox_tcg_detail.enabled || exit > TB_EXIT_IDX1) {
+        return;
+    }
+    bool entry_pc = !tb;
+    if (entry_pc) {
+        xbox_tcg_detail.no_tb++;
+        tb = itb;
+    }
+    if (++xbox_tcg_detail.returns & 4095) {
+        return;
+    }
+    xbox_tcg_detail.samples++;
+    bool patchable = !entry_pc &&
+                     tb->jmp_reset_offset[exit] != TB_JMP_OFFSET_INVALID;
+    unsigned hash =
+        (tb->pc ^ (tb->pc >> 8) ^ tb->cs_base ^ tb->cflags ^ exit) & 255;
+    for (unsigned i = 0; i < ARRAY_SIZE(xbox_tcg_detail.slots); i++) {
+        unsigned slot = (hash + i) & 255;
+        typeof(xbox_tcg_detail.slots[0]) *entry = &xbox_tcg_detail.slots[slot];
+        if (!entry->count ||
+            (entry->pc == tb->pc && entry->cs_base == tb->cs_base &&
+             entry->cflags == tb->cflags && entry->exit == exit &&
+             entry->patchable == patchable && entry->entry_pc == entry_pc)) {
+            entry->pc = tb->pc;
+            entry->cs_base = tb->cs_base;
+            entry->cflags = tb->cflags;
+            entry->exit = exit;
+            entry->patchable = patchable;
+            entry->entry_pc = entry_pc;
+            entry->count++;
+            return;
+        }
+    }
+    xbox_tcg_detail.dropped++;
+}
+
 #define XBOX_TCG_COUNT(field) do { \
     if (unlikely(xbox_tcg_stats.enabled)) { \
         xbox_tcg_stats.field++; \
@@ -72,6 +129,13 @@ static void xbox_tcg_stats_enter(void)
     bool enabled =
         trace_event_get_state_backends(TRACE_XEMU_TCG_EXEC_STATS) ||
         trace_event_get_state_backends(TRACE_XEMU_TCG_LOOKUP_STATS);
+    bool detail = trace_event_get_state_backends(TRACE_XEMU_TCG_CHAIN_STATS) ||
+                  trace_event_get_state_backends(TRACE_XEMU_TCG_HOTSPOT);
+    if (detail != xbox_tcg_detail.enabled) {
+        memset(&xbox_tcg_detail, 0, sizeof(xbox_tcg_detail));
+        xbox_tcg_detail.enabled = detail;
+    }
+    enabled |= detail;
     if (enabled && !xbox_tcg_stats.enabled) {
         memset(&xbox_tcg_stats, 0, sizeof(xbox_tcg_stats));
         xbox_tcg_stats.start_ns = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
@@ -100,10 +164,36 @@ static void xbox_tcg_stats_report(CPUState *cpu)
         cpu->cpu_index, xbox_tcg_stats.lookups, xbox_tcg_stats.jump_misses,
         xbox_tcg_stats.table_misses, xbox_tcg_stats.generated,
         xbox_tcg_stats.chain_attempts);
+    if (xbox_tcg_detail.enabled) {
+        trace_xemu_tcg_chain_stats(cpu->cpu_index,
+            xbox_tcg_detail.linked, xbox_tcg_detail.invalid,
+            xbox_tcg_detail.occupied, xbox_tcg_detail.two_pages,
+            xbox_tcg_detail.no_previous, xbox_tcg_detail.samples,
+            xbox_tcg_detail.dropped, xbox_tcg_detail.no_tb);
+        for (unsigned rank = 0; rank < 8; rank++) {
+            unsigned best = 0;
+            for (unsigned i = 1; i < ARRAY_SIZE(xbox_tcg_detail.slots); i++) {
+                if (xbox_tcg_detail.slots[i].count >
+                    xbox_tcg_detail.slots[best].count) {
+                    best = i;
+                }
+            }
+            typeof(xbox_tcg_detail.slots[0]) *entry = &xbox_tcg_detail.slots[best];
+            if (!entry->count) {
+                break;
+            }
+            trace_xemu_tcg_hotspot(cpu->cpu_index, entry->pc, entry->cs_base,
+                entry->cflags, entry->exit, entry->patchable, entry->entry_pc,
+                entry->count);
+            entry->count = 0;
+        }
+        memset(xbox_tcg_detail.slots, 0, sizeof(xbox_tcg_detail.slots));
+    }
     xbox_tcg_stats.report_ns = now;
 }
 #else
 #define XBOX_TCG_COUNT(field) do { } while (0)
+#define XBOX_TCG_DETAIL_COUNT(field) do { } while (0)
 #endif
 
 /* -icount align implementation. */
@@ -844,6 +934,11 @@ cpu_tb_exec(CPUState *cpu, TranslationBlock *itb, int *tb_exit)
     last_tb = tcg_splitwx_to_rw((void *)(ret & ~TB_EXIT_MASK));
     *tb_exit = ret & TB_EXIT_MASK;
     XBOX_TCG_COUNT(exits[*tb_exit]);
+#ifdef XBOX_TCG_DIRECT_TB_STATE
+    if (unlikely(xbox_tcg_detail.enabled)) {
+        xbox_tcg_sample_return(last_tb, itb, *tb_exit);
+    }
+#endif
 
     trace_exec_tb_exit(last_tb, *tb_exit);
 
@@ -1039,12 +1134,14 @@ static inline void tb_add_jump(TranslationBlock *tb, int n,
 
     /* make sure the destination TB is valid */
     if (tb_next->cflags & CF_INVALID) {
+        XBOX_TCG_DETAIL_COUNT(invalid);
         goto out_unlock_next;
     }
     /* Atomically claim the jump destination slot only if it was NULL */
     old = qatomic_cmpxchg(&tb->jmp_dest[n], (uintptr_t)NULL,
                           (uintptr_t)tb_next);
     if (old) {
+        XBOX_TCG_DETAIL_COUNT(occupied);
         goto out_unlock_next;
     }
 
@@ -1053,6 +1150,7 @@ static inline void tb_add_jump(TranslationBlock *tb, int n,
 
     /* add in TB jmp list */
     tb->jmp_list_next[n] = tb_next->jmp_list_head;
+    XBOX_TCG_DETAIL_COUNT(linked);
     tb_next->jmp_list_head = (uintptr_t)tb | n;
 
     qemu_spin_unlock(&tb_next->jmp_lock);
@@ -1424,6 +1522,9 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
              * for the second page can change.
              */
             if (tb_page_addr1(tb) != -1) {
+                if (last_tb) {
+                    XBOX_TCG_DETAIL_COUNT(two_pages);
+                }
                 last_tb = NULL;
             }
 #endif
@@ -1431,6 +1532,8 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
             if (last_tb) {
                 XBOX_TCG_COUNT(chain_attempts);
                 tb_add_jump(last_tb, tb_exit, tb);
+            } else {
+                XBOX_TCG_DETAIL_COUNT(no_previous);
             }
 
             cpu_loop_exec_tb(cpu, tb, s.pc, &last_tb, &tb_exit);

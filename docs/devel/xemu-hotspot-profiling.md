@@ -47,6 +47,48 @@ Collect frame times separately, and repeat with tracing disabled to assess
 instrumentation overhead. Aggregate counts identify where to investigate;
 they do not measure time spent in a function.
 
+## Optional chaining diagnostics
+
+The wildcard command above also enables `xemu_tcg_chain_stats` and
+`xemu_tcg_hotspot`. For the original aggregate-only measurement, use
+`-trace xemu_tcg_exec_stats -trace xemu_tcg_lookup_stats -D tcg-profile.log`.
+Repeat the same scene with details disabled to assess their extra overhead.
+
+`xemu_tcg_chain_stats` contains cumulative counts since detail collection was
+enabled:
+
+- `linked`: successful jump-slot claims and patches.
+- `invalid`: link attempts rejected because the destination is invalid.
+- `occupied`: link attempts rejected because the destination slot is nonzero
+  (including a slot marked during invalidation).
+- `two_pages`: a predecessor discarded because the destination spans two pages.
+- `no_previous`: iterations reaching the linking step without a predecessor.
+  This includes `two_pages`, initial iterations and cleared predecessors; these
+  two counters are not disjoint.
+- `no_tb`: normal returns without an identified final TB. These cannot supply
+  a predecessor for direct linking.
+- `samples`, `dropped`: selected return samples and samples omitted because
+  the bounded address table was full.
+
+The sampler selects every 4096th normal return (exit slot 0 or 1), excluding
+requested exits and longjmp paths. Each reporting interval retains at most
+256 distinct combinations of PC, CS base, cflags, exit slot and address kind.
+Existing combinations continue accumulating when the table is full. Up to
+eight combinations with the largest retained counts are logged as
+`xemu_tcg_hotspot`, then the table is cleared. Hotspot counts are per interval;
+they are not cumulative and do not necessarily sum to all selected samples.
+Periodic sampling can alias with guest loops, and table saturation biases
+results toward earlier addresses. Treat this as candidate identification,
+not an exact ranking or a measurement of CPU time.
+
+`entry_pc=0` identifies the final returned TB. `entry_pc=1` means no final TB
+was supplied, so the PC and flags describe the entry TB instead; a chain may
+have run before the return. `patchable=1` means the final TB has a generated
+jump for that exit slot; it does not assert that the jump is currently linked
+or safe to link. Inspect `cflags` using `include/exec/translation-block.h`,
+especially `CF_NO_GOTO_TB` and `CF_NO_GOTO_PTR`. No TB pointers are retained
+between samples, and collection does not change linking decisions.
+
 ## Vulkan texture counters
 
 Open the video debug display and expand `Advanced`. The existing per-frame

@@ -7,6 +7,8 @@ exec_tb_nocache(void *tb, uintptr_t pc) "tb:%p pc=0x%"PRIxPTR
 exec_tb_exit(void *last_tb, unsigned int flags) "tb:%p flags=0x%x"
 xemu_tcg_exec_stats(int cpu, uint64_t elapsed_ns, uint64_t entries, uint64_t exit0, uint64_t exit1, uint64_t requested, uint64_t other) "cpu=%d elapsed_ns=%"PRIu64" entries=%"PRIu64" exit0=%"PRIu64" exit1=%"PRIu64" requested=%"PRIu64" other=%"PRIu64
 xemu_tcg_lookup_stats(int cpu, uint64_t lookups, uint64_t jump_misses, uint64_t table_misses, uint64_t generated, uint64_t chain_attempts) "cpu=%d lookups=%"PRIu64" jump_misses=%"PRIu64" table_misses=%"PRIu64" generated=%"PRIu64" chain_attempts=%"PRIu64
+xemu_tcg_chain_stats(int cpu, uint64_t linked, uint64_t invalid, uint64_t occupied, uint64_t two_pages, uint64_t no_previous, uint64_t samples, uint64_t dropped, uint64_t no_tb) "cpu=%d linked=%"PRIu64" invalid=%"PRIu64" occupied=%"PRIu64" two_pages=%"PRIu64" no_previous=%"PRIu64" samples=%"PRIu64" dropped=%"PRIu64" no_tb=%"PRIu64
+xemu_tcg_hotspot(int cpu, uint64_t pc, uint64_t cs_base, uint32_t cflags, unsigned exit, bool patchable, bool entry_pc, uint64_t samples) "cpu=%d pc=0x%"PRIx64" cs_base=0x%"PRIx64" cflags=0x%"PRIx32" exit=%u patchable=%d entry_pc=%d samples=%"PRIu64
 
 # cputlb.c
 memory_notdirty_write_access(uint64_t vaddr, uint64_t ram_addr, unsigned size) "0x%" PRIx64 " ram_addr 0x%" PRIx64 " size %u"
