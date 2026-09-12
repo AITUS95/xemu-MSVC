@@ -66,7 +66,7 @@ static __thread struct {
     uint64_t returns, samples, dropped, no_tb;
     uint64_t linked, invalid, occupied, two_pages, no_previous;
     struct {
-        uint64_t pc, cs_base, count;
+        uint64_t pc, resume_pc, cs_base, count;
         uint32_t cflags;
         unsigned exit;
         bool patchable, entry_pc;
@@ -79,33 +79,42 @@ static __thread struct {
     } \
 } while (0)
 
-static void xbox_tcg_sample_return(TranslationBlock *tb, TranslationBlock *itb,
+static void xbox_tcg_sample_return(CPUState *cpu, TranslationBlock *tb,
+                                   TranslationBlock *itb, vaddr input_pc,
                                    unsigned exit)
 {
     if (!xbox_tcg_detail.enabled || exit > TB_EXIT_IDX1) {
         return;
     }
-    bool entry_pc = !tb;
-    if (entry_pc) {
+    if (!tb) {
         xbox_tcg_detail.no_tb++;
-        tb = itb;
     }
     if (++xbox_tcg_detail.returns & 4095) {
         return;
     }
     xbox_tcg_detail.samples++;
-    bool patchable = !entry_pc &&
+    bool patchable = tb &&
                      tb->jmp_reset_offset[exit] != TB_JMP_OFFSET_INVALID;
+    /* PC-relative TBs do not store their runtime address. A return PC is
+     * not the start of the final TB; retain the known entry PC instead. */
+    bool entry_pc = !tb || (tb->cflags & CF_PCREL);
+    uint64_t pc = entry_pc ? input_pc : tb->pc;
+    uint64_t resume_pc = cpu->cc->get_pc(cpu);
+    if (entry_pc) {
+        tb = itb;
+    }
     unsigned hash =
-        (tb->pc ^ (tb->pc >> 8) ^ tb->cs_base ^ tb->cflags ^ exit) & 255;
+        (pc ^ (pc >> 8) ^ resume_pc ^ tb->cs_base ^ tb->cflags ^ exit) & 255;
     for (unsigned i = 0; i < ARRAY_SIZE(xbox_tcg_detail.slots); i++) {
         unsigned slot = (hash + i) & 255;
         typeof(xbox_tcg_detail.slots[0]) *entry = &xbox_tcg_detail.slots[slot];
         if (!entry->count ||
-            (entry->pc == tb->pc && entry->cs_base == tb->cs_base &&
+            (entry->pc == pc && entry->resume_pc == resume_pc &&
+             entry->cs_base == tb->cs_base &&
              entry->cflags == tb->cflags && entry->exit == exit &&
              entry->patchable == patchable && entry->entry_pc == entry_pc)) {
-            entry->pc = tb->pc;
+            entry->pc = pc;
+            entry->resume_pc = resume_pc;
             entry->cs_base = tb->cs_base;
             entry->cflags = tb->cflags;
             entry->exit = exit;
@@ -184,7 +193,7 @@ static void xbox_tcg_stats_report(CPUState *cpu)
             }
             trace_xemu_tcg_hotspot(cpu->cpu_index, entry->pc, entry->cs_base,
                 entry->cflags, entry->exit, entry->patchable, entry->entry_pc,
-                entry->count);
+                entry->count, entry->resume_pc);
             entry->count = 0;
         }
         memset(xbox_tcg_detail.slots, 0, sizeof(xbox_tcg_detail.slots));
@@ -908,14 +917,14 @@ static vaddr log_pc(CPUState *cpu, const TranslationBlock *tb)
  * affect the impact of CFI in environment with high security requirements
  */
 static inline TranslationBlock * QEMU_DISABLE_CFI
-cpu_tb_exec(CPUState *cpu, TranslationBlock *itb, int *tb_exit)
+cpu_tb_exec(CPUState *cpu, TranslationBlock *itb, vaddr input_pc, int *tb_exit)
 {
     uintptr_t ret;
     TranslationBlock *last_tb;
     const void *tb_ptr = itb->tc.ptr;
 
     if (qemu_loglevel_mask(CPU_LOG_TB_CPU | CPU_LOG_EXEC)) {
-        log_cpu_exec(log_pc(cpu, itb), cpu, itb);
+        log_cpu_exec(input_pc, cpu, itb);
     }
 
     qemu_thread_jit_execute();
@@ -936,7 +945,7 @@ cpu_tb_exec(CPUState *cpu, TranslationBlock *itb, int *tb_exit)
     XBOX_TCG_COUNT(exits[*tb_exit]);
 #ifdef XBOX_TCG_DIRECT_TB_STATE
     if (unlikely(xbox_tcg_detail.enabled)) {
-        xbox_tcg_sample_return(last_tb, itb, *tb_exit);
+        xbox_tcg_sample_return(cpu, last_tb, itb, input_pc, *tb_exit);
     }
 #endif
 
@@ -1088,7 +1097,7 @@ void cpu_exec_step_atomic(CPUState *cpu)
         cpu_exec_enter(cpu);
         /* execute the generated code */
         trace_exec_tb(tb, s.pc);
-        cpu_tb_exec(cpu, tb, &tb_exit);
+        cpu_tb_exec(cpu, tb, s.pc, &tb_exit);
         cpu_exec_exit(cpu);
     } else {
 #ifdef QEMU_WIN32_SIGJMP_DEFINED
@@ -1419,7 +1428,7 @@ static inline void cpu_loop_exec_tb(CPUState *cpu, TranslationBlock *tb,
                                     int *tb_exit)
 {
     trace_exec_tb(tb, pc);
-    tb = cpu_tb_exec(cpu, tb, tb_exit);
+    tb = cpu_tb_exec(cpu, tb, pc, tb_exit);
     if (*tb_exit != TB_EXIT_REQUESTED) {
         *last_tb = tb;
         return;

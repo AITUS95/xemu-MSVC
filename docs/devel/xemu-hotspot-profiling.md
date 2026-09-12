@@ -72,7 +72,8 @@ enabled:
 
 The sampler selects every 4096th normal return (exit slot 0 or 1), excluding
 requested exits and longjmp paths. Each reporting interval retains at most
-256 distinct combinations of PC, CS base, cflags, exit slot and address kind.
+256 distinct combinations of PC, return PC, CS base, cflags, exit slot and
+address kind.
 Existing combinations continue accumulating when the table is full. Up to
 eight combinations with the largest retained counts are logged as
 `xemu_tcg_hotspot`, then the table is cleared. Hotspot counts are per interval;
@@ -81,9 +82,18 @@ Periodic sampling can alias with guest loops, and table saturation biases
 results toward earlier addresses. Treat this as candidate identification,
 not an exact ranking or a measurement of CPU time.
 
-`entry_pc=0` identifies the final returned TB. `entry_pc=1` means no final TB
-was supplied, so the PC and flags describe the entry TB instead; a chain may
-have run before the return. `patchable=1` means the final TB has a generated
+`entry_pc=0` identifies the final returned non-PC-relative TB. `entry_pc=1`
+means no final TB was supplied, or it uses `CF_PCREL` and therefore does not
+store its runtime address. In either case, `pc` is the runtime entry address
+passed by the execution loop, and flags and CS base describe the entry TB.
+A chain may have run before the return. `resume_pc` is the CPU-reported PC
+sampled after a normal return, not the start of the final TB or the address
+of the instruction responsible for the exit. Pair it with the entry PC to
+identify candidate guest paths. It is read only for selected samples.
+Earlier logs without `resume_pc` used `tb->pc` even with `CF_PCREL`; their
+zero addresses cannot identify hotspots and must not be compared as addresses.
+
+`patchable=1` means the final TB has a generated
 jump for that exit slot; it does not assert that the jump is currently linked
 or safe to link. Inspect `cflags` using `include/exec/translation-block.h`,
 especially `CF_NO_GOTO_TB` and `CF_NO_GOTO_PTR`. No TB pointers are retained
