@@ -1457,6 +1457,20 @@ cpu_exec_setjmp(CPUState *cpu, SyncClocks *sc)
     return cpu_exec_loop(cpu, sc);
 }
 
+static void __attribute__((noinline)) cpu_exec_finish(CPUState *cpu)
+{
+#ifdef QEMU_WIN32_SIGJMP_DEFINED
+    /* Resolve TLS in a fresh frame after the builtin longjmp. The caller
+     * may still hold TLS base pointers cached before cpu_exec_setjmp. */
+    cpu = cpu_exec_restore_longjmp_cpu(cpu);
+    qemu_win_sigjmp_cpu = NULL;
+#endif
+    cpu_exec_exit(cpu);
+#ifdef XBOX_TCG_DIRECT_TB_STATE
+    xbox_tcg_stats_report(cpu);
+#endif
+}
+
 int cpu_exec(CPUState *cpu)
 {
     int ret;
@@ -1488,15 +1502,7 @@ int cpu_exec(CPUState *cpu)
     qemu_win_sigjmp_cpu = NULL;
 #endif
     ret = cpu_exec_setjmp(cpu, &sc);
-#ifdef QEMU_WIN32_SIGJMP_DEFINED
-    cpu = cpu_exec_restore_longjmp_cpu(cpu);
-    qemu_win_sigjmp_cpu = NULL;
-#endif
-
-    cpu_exec_exit(cpu);
-#ifdef XBOX_TCG_DIRECT_TB_STATE
-    xbox_tcg_stats_report(cpu);
-#endif
+    cpu_exec_finish(cpu);
     return ret;
 }
 
