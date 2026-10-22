@@ -252,6 +252,16 @@ void xemu_snapshots_save(const char *vm_name, Error **err)
     save_snapshot(vm_name, true, NULL, false, NULL, err);
 }
 
+bool xemu_snapshots_save_new(Error **err)
+{
+    g_autoptr(GDateTime) now = g_date_time_new_now_local();
+    g_autofree char *timestamp = g_date_time_format(now, "vm-%Y%m%d%H%M%S");
+    g_autofree char *uuid = g_uuid_string_random();
+    g_autofree char *name = g_strdup_printf("%s-%s", timestamp, uuid);
+
+    return save_snapshot(name, false, NULL, false, NULL, err);
+}
+
 void xemu_snapshots_delete(const char *vm_name, Error **err)
 {
     delete_snapshot(vm_name, false, NULL, err);

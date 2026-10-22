@@ -67,6 +67,13 @@ void ProcessKeyboardShortcuts(void)
         monitor_window.ToggleOpen();
     }
 
+    if (ImGui::IsKeyPressed(ImGuiKey_F9, false)) {
+        ImGuiIO& io = ImGui::GetIO();
+        if (!io.KeyCtrl && !io.KeyShift && !io.KeyAlt && !io.KeySuper) {
+            ActionCreateSnapshot();
+        }
+    }
+
     if (ImGui::IsKeyPressed(ImGuiKey_F12)) {
         ActionScreenshot();
     }
@@ -96,9 +103,8 @@ void ShowMainMenu()
             if (ImGui::MenuItem("Screenshot", "F12")) ActionScreenshot();
 
             if (ImGui::BeginMenu("Snapshot")) {
-                if (ImGui::MenuItem("Create Snapshot")) {
-                    xemu_snapshots_save(NULL, NULL);
-                    xemu_queue_notification("Created new snapshot");
+                if (ImGui::MenuItem("Create Snapshot", "F9")) {
+                    ActionCreateSnapshot();
                 }
 
                 for (int i = 0; i < 4; ++i) {

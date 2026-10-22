@@ -91,6 +91,23 @@ void ActionScreenshot(void)
 	g_screenshot_pending = true;
 }
 
+void ActionCreateSnapshot(void)
+{
+    Error *err = NULL;
+    bool saved = xemu_snapshots_save_new(&err);
+
+    if (!saved) {
+        xemu_queue_error_message(err ? error_get_pretty(err) :
+                                       "Could not create snapshot");
+        if (err) {
+            error_free(err);
+        }
+        return;
+    }
+
+    xemu_queue_notification("Created new snapshot");
+}
+
 void ActionActivateBoundSnapshot(int slot, bool save)
 {
     assert(slot < 4 && slot >= 0);

@@ -49,6 +49,7 @@ int xemu_snapshots_list(QEMUSnapshotInfo **info, XemuSnapshotData **extra_data,
                         Error **err);
 void xemu_snapshots_load(const char *vm_name, Error **err);
 void xemu_snapshots_save(const char *vm_name, Error **err);
+bool xemu_snapshots_save_new(Error **err);
 void xemu_snapshots_delete(const char *vm_name, Error **err);
 
 void xemu_snapshots_save_extra_data(QEMUFile *f);

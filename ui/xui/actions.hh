@@ -25,5 +25,6 @@ void ActionTogglePause();
 void ActionReset();
 void ActionShutdown();
 void ActionScreenshot();
+void ActionCreateSnapshot();
 void ActionActivateBoundSnapshot(int slot, bool save);
 void ActionLoadSnapshotChecked(const char *name);
