@@ -675,15 +675,11 @@ static bool shader_state_dirty_for_vk(PGRAPHState *pg)
         return true;
     }
 
-    /* These inputs can change without setting a PGRAPH register dirty bit.
+    /* Point parameters can change without setting a PGRAPH register dirty bit.
      * Compare float representations, as the shader cache key does. */
-    if (memcmp(&pg->specular_power, &state->vsh.specular_power,
-               sizeof(pg->specular_power)) ||
-        memcmp(&pg->specular_power_back, &state->vsh.specular_power_back,
-               sizeof(pg->specular_power_back)) ||
-        (state->vsh.point_params_enable &&
-         memcmp(pg->point_params, state->vsh.point_params,
-                sizeof(state->vsh.point_params)))) {
+    if (state->vsh.point_params_enable &&
+        memcmp(pg->point_params, state->vsh.point_params,
+               sizeof(state->vsh.point_params))) {
         return true;
     }
 
