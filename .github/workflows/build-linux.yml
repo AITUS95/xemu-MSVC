@@ -215,7 +215,9 @@ jobs:
         tar -C appimage -xf data.tar*
         install -DT .incremental-src/xemu.metainfo.xml appimage/usr/share/metainfo/xemu.metainfo.xml
 
-        ./linuxdeploy-${{ matrix.arch }}.AppImage --output appimage --appdir appimage
+        # Use host GLib for libdecor/GTK on Wayland (avoid incompatible bundled GLib).
+        ./linuxdeploy-${{ matrix.arch }}.AppImage --output appimage --appdir appimage \
+          --exclude-library 'libglib-2.0.so*'
     - name: Bundle artifacts
       run: |
         mkdir -p dist

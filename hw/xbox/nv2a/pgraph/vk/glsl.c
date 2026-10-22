@@ -42,7 +42,8 @@ typedef struct NV2AVkShaderCacheHeader {
     uint64_t spirv_size;
 } NV2AVkShaderCacheHeader;
 
-static void save_vk_shader_cache_blob(VkShaderStageFlagBits stage,
+static void save_vk_shader_cache_blob(PGRAPHVkState *r,
+                                      VkShaderStageFlagBits stage,
                                       const char *glsl, GByteArray *spv);
 
 static const char *get_vk_shader_cache_build_id(void)
@@ -105,7 +106,8 @@ static void invalidate_vk_shader_cache_file(char *path)
     qemu_unlink(path);
 }
 
-static bool load_vk_shader_cache_blob(VkShaderStageFlagBits stage,
+static bool load_vk_shader_cache_blob(PGRAPHVkState *r,
+                                      VkShaderStageFlagBits stage,
                                       const char *glsl, GByteArray **spv)
 {
     FILE *cache_file;
@@ -127,7 +129,8 @@ static bool load_vk_shader_cache_blob(VkShaderStageFlagBits stage,
         return false;
     }
 
-    cache_key = xemu_get_current_title_cache_key();
+    g_autofree char *title_cache_key = xemu_get_current_title_cache_key();
+    cache_key = g_strdup_printf("%s/vk-%08x", title_cache_key, r->vk_api_version);
     cache_path = get_vk_shader_cache_path_for_key(stage, glsl_hash,
                                                   debug_shaders, cache_key);
     cache_file = qemu_fopen(cache_path, "rb");
@@ -176,7 +179,7 @@ static bool load_vk_shader_cache_blob(VkShaderStageFlagBits stage,
         *spv = g_byte_array_new_take(g_steal_pointer(&data), header.spirv_size);
     }
     if (loaded_from_legacy) {
-        save_vk_shader_cache_blob(stage, glsl, *spv);
+        save_vk_shader_cache_blob(r, stage, glsl, *spv);
     }
     ok = true;
     goto out_close;
@@ -190,7 +193,8 @@ out_close:
     return ok;
 }
 
-static void save_vk_shader_cache_blob(VkShaderStageFlagBits stage,
+static void save_vk_shader_cache_blob(PGRAPHVkState *r,
+                                      VkShaderStageFlagBits stage,
                                       const char *glsl, GByteArray *spv)
 {
     NV2AVkShaderCacheHeader header = {
@@ -203,7 +207,9 @@ static void save_vk_shader_cache_blob(VkShaderStageFlagBits stage,
         .glsl_hash = fast_hash((void *)glsl, strlen(glsl)),
         .spirv_size = spv->len,
     };
-    g_autofree char *cache_key = xemu_get_current_title_cache_key();
+    g_autofree char *title_cache_key = xemu_get_current_title_cache_key();
+    g_autofree char *cache_key =
+        g_strdup_printf("%s/vk-%08x", title_cache_key, r->vk_api_version);
     g_autofree char *cache_dir =
         get_vk_shader_cache_dir_for_key(header.glsl_hash,
                                         header.debug_shaders, cache_key);
@@ -365,16 +371,40 @@ void pgraph_vk_finalize_glsl_compiler(void)
     glslang_finalize_process();
 }
 
-GByteArray *pgraph_vk_compile_glsl_to_spv(glslang_stage_t stage,
+GByteArray *pgraph_vk_compile_glsl_to_spv(PGRAPHVkState *r,
+                                          glslang_stage_t stage,
                                           const char *glsl_source)
 {
+    glslang_target_client_version_t client_version;
+    glslang_target_language_version_t target_spv;
+
+#ifdef VK_API_VERSION_1_4
+    if (r->vk_api_version >= VK_API_VERSION_1_4) {
+        client_version = GLSLANG_TARGET_VULKAN_1_4;
+        target_spv = GLSLANG_TARGET_SPV_1_6;
+    } else
+#endif
+#ifdef VK_API_VERSION_1_3
+    if (r->vk_api_version >= VK_API_VERSION_1_3) {
+        client_version = GLSLANG_TARGET_VULKAN_1_3;
+        target_spv = GLSLANG_TARGET_SPV_1_6;
+    } else
+#endif
+    if (r->vk_api_version >= VK_API_VERSION_1_2) {
+        client_version = GLSLANG_TARGET_VULKAN_1_2;
+        target_spv = GLSLANG_TARGET_SPV_1_5;
+    } else {
+        client_version = GLSLANG_TARGET_VULKAN_1_1;
+        target_spv = GLSLANG_TARGET_SPV_1_3;
+    }
+
     const glslang_input_t input = {
         .language = GLSLANG_SOURCE_GLSL,
         .stage = stage,
         .client = GLSLANG_CLIENT_VULKAN,
-        .client_version = GLSLANG_TARGET_VULKAN_1_3,
+        .client_version = client_version,
         .target_language = GLSLANG_TARGET_SPV,
-        .target_language_version = GLSLANG_TARGET_SPV_1_6,
+        .target_language_version = target_spv,
         .code = glsl_source,
         .default_version = 460,
         .default_profile = GLSLANG_NO_PROFILE,
@@ -597,10 +627,10 @@ ShaderModuleInfo *pgraph_vk_create_shader_module_from_glsl(
     info->refcnt = 0;
     info->glsl = strdup(glsl);
 
-    if (!load_vk_shader_cache_blob(stage, glsl, &info->spirv)) {
+    if (!load_vk_shader_cache_blob(r, stage, glsl, &info->spirv)) {
         info->spirv = pgraph_vk_compile_glsl_to_spv(
-            vk_shader_stage_to_glslang_stage(stage), glsl);
-        save_vk_shader_cache_blob(stage, glsl, info->spirv);
+            r, vk_shader_stage_to_glslang_stage(stage), glsl);
+        save_vk_shader_cache_blob(r, stage, glsl, info->spirv);
     }
 
     info->module = pgraph_vk_create_shader_module_from_spv(r, info->spirv);

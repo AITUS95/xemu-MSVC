@@ -324,12 +324,34 @@ void pgraph_gl_bind_textures(NV2AState *d)
             surface = pgraph_gl_surface_get_within(d, texture_vram_offset);
         }
         SurfaceBinding *texture_surface = surface;
+        /*
+         * Check active surfaces to see if this texture was a render target
+         */
+        bool surf_to_tex = false;
+        unsigned int surface_texture_x = 0;
+        unsigned int surface_texture_y = 0;
+        unsigned int min_filter =
+            GET_MASK(filter, NV_PGRAPH_TEXFILTER0_MIN);
+        bool texture_uses_mipmaps =
+            !kelvin_color_format_info_map[state.color_format].linear &&
+            texture_min_filter_uses_mipmaps(min_filter);
+        if (surface != NULL) {
+            surf_to_tex = pgraph_gl_check_surface_to_texture_compatibility(
+                    surface, &state, texture_vram_offset, texture_uses_mipmaps,
+                    &surface_texture_x, &surface_texture_y);
+
+            if (surf_to_tex && surface->upload_pending) {
+                pgraph_gl_upload_surface_data(d, surface, false);
+            }
+        }
+
         TextureBinding *tbind = r->texture_binding[i];
         if (!pg->texture_dirty[i] && tbind) {
             bool reusable = false;
-            if (surface && tbind->draw_time == surface->draw_time) {
+            if (surf_to_tex && !surface->upload_pending &&
+                tbind->draw_time == surface->draw_time) {
                 reusable = true;
-            } else if (!surface &&
+            } else if (!surface && !tbind->draw_time &&
                        !texture_binding_pages_dirty(
                            r, tbind, texture_vram_offset, length,
                            palette_vram_offset,
@@ -357,27 +379,6 @@ void pgraph_gl_bind_textures(NV2AState *d)
                                          border_color,
                                          max_anisotropy);
                 continue;
-            }
-        }
-
-        /*
-         * Check active surfaces to see if this texture was a render target
-         */
-        bool surf_to_tex = false;
-        unsigned int surface_texture_x = 0;
-        unsigned int surface_texture_y = 0;
-        unsigned int min_filter =
-            GET_MASK(filter, NV_PGRAPH_TEXFILTER0_MIN);
-        bool texture_uses_mipmaps =
-            !kelvin_color_format_info_map[state.color_format].linear &&
-            texture_min_filter_uses_mipmaps(min_filter);
-        if (surface != NULL) {
-            surf_to_tex = pgraph_gl_check_surface_to_texture_compatibility(
-                    surface, &state, texture_vram_offset, texture_uses_mipmaps,
-                    &surface_texture_x, &surface_texture_y);
-
-            if (surf_to_tex && surface->upload_pending) {
-                pgraph_gl_upload_surface_data(d, surface, false);
             }
         }
 
@@ -442,7 +443,8 @@ void pgraph_gl_bind_textures(NV2AState *d)
         void *palette_data = (char*)d->vram_ptr + palette_vram_offset;
 
         uint64_t tex_data_hash = 0;
-        if (!surf_to_tex && possibly_dirty) {
+        if (!surf_to_tex && (!key_out->binding || key_out->binding->draw_time ||
+                             possibly_dirty)) {
             tex_data_hash = fast_hash(texture_data, length);
             if (is_indexed) {
                 tex_data_hash ^= fast_hash(palette_data, palette_length);
@@ -450,9 +452,13 @@ void pgraph_gl_bind_textures(NV2AState *d)
         }
 
         // Free existing binding, if texture data has changed
-        bool must_destroy = (key_out->binding != NULL)
-                            && possibly_dirty
-                            && (key_out->binding->data_hash != tex_data_hash);
+        bool must_destroy = false;
+        if (key_out->binding && !surf_to_tex) {
+            must_destroy = key_out->binding->draw_time ||
+                           (possibly_dirty &&
+                            (key_out->binding->data_hash != tex_data_hash));
+        }
+
         if (must_destroy) {
             texture_binding_destroy(key_out->binding);
             key_out->binding = NULL;
