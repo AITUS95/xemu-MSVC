@@ -65,6 +65,9 @@ static int g_vsync;
 static GLuint g_tex;
 static bool g_flip_req;
 
+/* Runtime View-menu toggle; overlay is enabled by default. */
+bool g_show_emulation_speed = true;
+
 
 static void InitializeStyle()
 {
@@ -187,6 +190,37 @@ void xemu_hud_set_framebuffer_texture(GLuint tex, bool flip)
 {
     g_tex = tex;
     g_flip_req = flip;
+}
+
+static void DrawEmulationSpeedOverlay(void)
+{
+    const ImGuiIO &io = ImGui::GetIO();
+    const float padding = 12.0f * g_viewport_mgr.m_scale;
+    const ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoDecoration |
+        ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoNav |
+        ImGuiWindowFlags_NoInputs |
+        ImGuiWindowFlags_NoFocusOnAppearing;
+
+    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - padding, padding),
+                            ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.55f);
+
+    if (ImGui::Begin("##EmulationSpeedOverlay", nullptr, flags)) {
+        float percent = 0.0f;
+
+        if (!runstate_is_running()) {
+            ImGui::TextUnformatted("Emulation: Paused");
+        } else if (xemu_get_emulation_speed(&percent)) {
+            ImGui::Text("Emulation: %.1f%%", percent);
+        } else {
+            ImGui::TextUnformatted("Emulation: --");
+        }
+        ImGui::TextDisabled("VBlank service timing");
+    }
+    ImGui::End();
 }
 
 void xemu_hud_update(void)
@@ -315,6 +349,9 @@ void xemu_hud_update(void)
     update_window.Draw();
 #endif
     g_scene_mgr.Draw();
+    if (g_show_emulation_speed && !first_boot_window.is_open) {
+        DrawEmulationSpeedOverlay();
+    }
     if (!first_boot_window.is_open) notification_manager.Draw();
     g_snapshot_mgr.Draw();
 
