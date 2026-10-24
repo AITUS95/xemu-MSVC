@@ -46,6 +46,7 @@
 #include "system/runstate-action.h"
 #include "system/system.h"
 #include "xui/xemu-hud.h"
+#include "xemu-emulation-speed.h"
 #include "xemu-input.h"
 #include "xemu-settings.h"
 #include "xemu-snapshots.h"
@@ -867,6 +868,19 @@ static float update_avg(float avg, float ms, float r) {
     return avg;
 }
 
+/*
+ * Only the BQL-owning VBlank callback updates this meter. The UI reads
+ * it from xemu_hud_update(), which also runs under the BQL.
+ */
+static XemuEmulationSpeed g_emulation_speed_meter;
+
+bool xemu_get_emulation_speed(float *percent)
+{
+    return xemu_emulation_speed_get(&g_emulation_speed_meter,
+                                    qemu_clock_get_ns(QEMU_CLOCK_REALTIME),
+                                    percent);
+}
+
 static float fps = 1.0;
 
 static void update_fps(void)
@@ -889,6 +903,10 @@ static void process_vblank(struct xemu_console *scon)
     assert(bql_locked());
 
     update_fps();
+    xemu_emulation_speed_vblank(&g_emulation_speed_meter,
+                                qemu_clock_get_ns(QEMU_CLOCK_REALTIME),
+                                (int64_t)vblank_interval_ns,
+                                runstate_is_running());
 
 #if 0
     static uint64_t last_ns = 0;
