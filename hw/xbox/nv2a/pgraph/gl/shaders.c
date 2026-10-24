@@ -25,6 +25,7 @@
 
 #include "xemu-version.h"
 #include "ui/xemu-settings.h"
+#include "hw/xbox/nv2a/debug_gl.h"
 #include "hw/xbox/nv2a/pgraph/util.h"
 #include "debug.h"
 #include "renderer.h"
@@ -375,7 +376,7 @@ void pgraph_gl_shader_write_cache_reload_list(PGRAPHState *pg)
 
 bool pgraph_gl_shader_load_from_memory(ShaderBinding *binding)
 {
-    assert(glGetError() == GL_NO_ERROR);
+    ASSERT_NO_GL_ERROR();
 
     if (!binding->program) {
         return false;
@@ -835,7 +836,7 @@ void pgraph_gl_shader_cache_to_disk(PGRAPHState *pg, ShaderBinding *binding)
     GLsizei program_size_copied;
     glGetProgramBinary(binding->gl_program, program_size, &program_size_copied,
                        &binding->program_format, binding->program);
-    assert(glGetError() == GL_NO_ERROR);
+    ASSERT_NO_GL_ERROR();
 
     binding->program_size = program_size_copied;
     binding->cached = true;
@@ -904,7 +905,7 @@ static void apply_uniform_updates(const UniformInfo *info, int *locs,
         }
     }
 
-    assert(glGetError() == GL_NO_ERROR);
+    ASSERT_NO_GL_ERROR();
 }
 
 static void update_shader_uniforms(PGRAPHState *pg, ShaderBinding *binding,

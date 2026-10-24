@@ -19,6 +19,17 @@ jobs:
     with:
       ref: ${{ github.ref }}
 
+  msvc:
+    name: Windows MSVC
+    needs: build
+    permissions:
+      actions: write
+      contents: read
+    uses: ./.github/workflows/windows-msvc.yml
+    with:
+      ref: ${{ github.ref }}
+      pkg_version: ${{ needs.build.outputs.pkg_version }}
+
   roswell:
     name: Roswell tests
     needs: build
