@@ -30,6 +30,7 @@
 #include "../xemu-os-utils.h"
 
 extern float g_main_menu_height; // FIXME
+extern bool g_show_emulation_speed;
 
 #ifdef CONFIG_RENDERDOC
 bool g_capture_renderdoc_frame = false;
@@ -213,6 +214,13 @@ void ShowMainMenu()
                          "Linear\0Nearest\0");
             ImGui::Combo("Aspect Ratio", &g_config.display.ui.aspect_ratio,
                          "Native\0Auto\0""4:3\0""16:9\0");
+            ImGui::MenuItem("Show emulation speed", NULL,
+                            &g_show_emulation_speed);
+            ImGui::SameLine();
+            HelpMarker("Measures serviced 50/60 Hz VBlank events per "
+                       "wall-clock second, independent of rendered FPS. "
+                       "This is a timing diagnostic, not a guarantee that "
+                       "CPU, GPU, APU or game logic is emulated accurately.");
             if (ImGui::MenuItem("Fullscreen", "F11",
                                 xemu_is_fullscreen(), true)) {
                 xemu_toggle_fullscreen();
