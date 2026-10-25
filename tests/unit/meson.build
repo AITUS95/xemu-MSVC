@@ -94,7 +94,7 @@ if have_block
     'test-crypto-afsplit': [io],
     'test-crypto-block': [io],
     'test-timed-average': [],
-  'test-xemu-emulation-speed': [],
+    'test-xemu-vblank-cadence': [],
     'test-uuid': [],
   }
   if gnutls.found() and \

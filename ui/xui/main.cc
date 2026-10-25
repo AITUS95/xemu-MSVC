@@ -66,7 +66,7 @@ static GLuint g_tex;
 static bool g_flip_req;
 
 /* Runtime View-menu toggle; overlay is enabled by default. */
-bool g_show_emulation_speed = true;
+bool g_show_timing_diagnostics = true;
 
 
 static void InitializeStyle()
@@ -192,7 +192,7 @@ void xemu_hud_set_framebuffer_texture(GLuint tex, bool flip)
     g_flip_req = flip;
 }
 
-static void DrawEmulationSpeedOverlay(void)
+static void DrawTimingDiagnosticsOverlay(void)
 {
     const ImGuiIO &io = ImGui::GetIO();
     const float padding = 12.0f * g_viewport_mgr.m_scale;
@@ -208,17 +208,17 @@ static void DrawEmulationSpeedOverlay(void)
                             ImGuiCond_Always, ImVec2(1.0f, 0.0f));
     ImGui::SetNextWindowBgAlpha(0.55f);
 
-    if (ImGui::Begin("##EmulationSpeedOverlay", nullptr, flags)) {
+    if (ImGui::Begin("##TimingDiagnosticsOverlay", nullptr, flags)) {
         float percent = 0.0f;
 
         if (!runstate_is_running()) {
-            ImGui::TextUnformatted("Emulation: Paused");
-        } else if (xemu_get_emulation_speed(&percent)) {
-            ImGui::Text("Emulation: %.1f%%", percent);
+            ImGui::TextUnformatted("VBlank cadence: paused");
+        } else if (xemu_get_vblank_cadence(&percent)) {
+            ImGui::Text("VBlank cadence: %.1f%%", percent);
         } else {
-            ImGui::TextUnformatted("Emulation: --");
+            ImGui::TextUnformatted("VBlank cadence: --");
         }
-        ImGui::TextDisabled("VBlank service timing");
+        ImGui::TextUnformatted("Global speed: unverified");
     }
     ImGui::End();
 }
@@ -349,8 +349,8 @@ void xemu_hud_update(void)
     update_window.Draw();
 #endif
     g_scene_mgr.Draw();
-    if (g_show_emulation_speed && !first_boot_window.is_open) {
-        DrawEmulationSpeedOverlay();
+    if (g_show_timing_diagnostics && !first_boot_window.is_open) {
+        DrawTimingDiagnosticsOverlay();
     }
     if (!first_boot_window.is_open) notification_manager.Draw();
     g_snapshot_mgr.Draw();
