@@ -21,6 +21,18 @@
 
 NV2AStats g_nv2a_stats;
 
+bool nv2a_profile_get_cadence_stats(NV2ACadenceStats *stats)
+{
+    if (!stats || !g_nv2a || qemu_mutex_trylock(&g_nv2a->pgraph.lock)) {
+        return false;
+    }
+    stats->increment_fps = g_nv2a_stats.increment_fps;
+    stats->flip_stall_count = g_nv2a_stats.frame_count;
+    stats->last_increment_us = g_nv2a_stats.last_flip_time;
+    qemu_mutex_unlock(&g_nv2a->pgraph.lock);
+    return true;
+}
+
 void nv2a_profile_increment(void)
 {
     int64_t now = qemu_clock_get_us(QEMU_CLOCK_REALTIME);

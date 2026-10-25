@@ -22,6 +22,7 @@
 #ifndef HW_XBOX_NV2A_DEBUG_H
 #define HW_XBOX_NV2A_DEBUG_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #define NV2A_XPRINTF(x, ...) do { \
@@ -135,6 +136,12 @@ typedef struct NV2AStats {
     unsigned int frame_ptr;
 } NV2AStats;
 
+typedef struct NV2ACadenceStats {
+    unsigned int increment_fps;
+    unsigned int flip_stall_count;
+    int64_t last_increment_us;
+} NV2ACadenceStats;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -145,6 +152,8 @@ const char *nv2a_profile_get_counter_name(unsigned int cnt);
 int nv2a_profile_get_counter_value(unsigned int cnt);
 void nv2a_profile_increment(void);
 void nv2a_profile_flip_stall(void);
+/* Nonblocking snapshot under the existing PGRAPH lock. */
+bool nv2a_profile_get_cadence_stats(NV2ACadenceStats *stats);
 
 static inline void nv2a_profile_inc_counter(enum NV2A_PROF_COUNTERS_ENUM cnt)
 {

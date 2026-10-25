@@ -233,6 +233,26 @@ static void DrawTimingDiagnosticsOverlay(void)
             ImGui::TextUnformatted("Callback max deviation: --");
             ImGui::TextUnformatted("Callback intervals >=2x nominal: --");
         }
+        float flip_stalls = 0.0f;
+        unsigned int gpu_fps = 0;
+        bool fps_available = false;
+        bool gpu_available = running && xemu_get_nv2a_cadence(
+            &flip_stalls, &gpu_fps, &fps_available);
+        if (!running) {
+            ImGui::TextUnformatted("NV2A FPS (read increments): paused");
+            ImGui::TextUnformatted("NV2A FLIP_STALL events: paused");
+        } else {
+            if (gpu_available && fps_available) {
+                ImGui::Text("NV2A FPS (read increments): %u", gpu_fps);
+            } else {
+                ImGui::TextUnformatted("NV2A FPS (read increments): --");
+            }
+            if (gpu_available) {
+                ImGui::Text("NV2A FLIP_STALL events: %.1f/s", flip_stalls);
+            } else {
+                ImGui::TextUnformatted("NV2A FLIP_STALL events: --");
+            }
+        }
         ImGui::TextUnformatted("Global speed: unverified");
     }
     ImGui::End();

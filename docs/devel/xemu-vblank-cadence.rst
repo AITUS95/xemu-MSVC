@@ -65,6 +65,32 @@ sampling thread, per-event allocation, file I/O or per-instruction callbacks
 are introduced. The getter asserts the BQL requirement. The View menu toggle
 controls the overlay only and is not persisted.
 
+GPU profiling rates
+-------------------
+
+``NV2A FPS (read increments)`` reuses ``increment_fps`` from Video Debug:
+the integer rate of guest ``NV_PGRAPH_INCREMENT_READ_3D`` operations, updated
+by the existing profiler over intervals of at least 250 ms. It is not a
+count of rendered or presented frames. Its last increment must be recent
+(within 500 ms); otherwise the overlay shows ``--`` instead of a cached FPS.
+
+``NV2A FLIP_STALL events`` is the change in the existing ``frame_count`` divided
+by monotonic host elapsed time, using windows of at least one second. This
+counter advances at ``NV097_FLIP_STALL`` handling after the renderer hook
+returns; it does not prove presentation or completion of an asynchronous
+GPU frame. The two rates can differ and are never averaged or converted to
+global speed. A rate of 30/s is not interpreted as 50% emulation speed.
+
+Only three existing fields are copied under a nonblocking attempt to take
+the existing PGRAPH lock, at most four times per second with the overlay
+visible. Writers and event instrumentation are unchanged. No new thread,
+lock, allocation or I/O is added. Warmup or snapshots older than 500 ms show
+``--``; a successful snapshot with no flips can produce a valid rate of zero.
+Pause/resume resets the UI meter. A counter decrease (including wrap), clock
+discontinuity or a long snapshot gap starts a fresh window. The existing FPS
+profiler retains its own timing history; its raw integer estimate can be
+transient after pause/resume. Neither rate verifies guest CPU/GPU timing.
+
 Why global speed is unverified
 ------------------------------
 
@@ -90,6 +116,12 @@ Validation
 Run the lightweight deterministic tests with::
 
     meson test -C build --print-errorlogs test-xemu-vblank-cadence
+    meson test -C build --print-errorlogs test-xemu-nv2a-cadence
+
+The NV2A tests cover 30/60 rates, different read-increment and flip-stall
+rates, zero flips, pause reset, counter rollback/wrap, unavailable samples,
+clock discontinuities and FPS freshness. They validate counter sampling,
+not rendered-frame completion or Xbox temporal accuracy.
 
 They cover nominal NTSC/PAL rates, a fractional reference, half/quarter
 servicing, pause/resume, stalls, recovery, discontinuities, mode changes,

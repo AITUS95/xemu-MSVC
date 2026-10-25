@@ -95,6 +95,7 @@ if have_block
     'test-crypto-block': [io],
     'test-timed-average': [],
     'test-xemu-vblank-cadence': [],
+    'test-xemu-nv2a-cadence': [],
     'test-uuid': [],
   }
   if gnutls.found() and \

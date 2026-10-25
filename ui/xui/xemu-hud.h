@@ -41,6 +41,9 @@ void xemu_main_loop_unlock(void);
 /* BQL required; optional interval outputs are cumulative since reset. */
 bool xemu_get_vblank_cadence(float *percent, int64_t *max_deviation_ns,
                             uint64_t *long_intervals);
+/* BQL required; FPS is the existing read-increment profiler statistic. */
+bool xemu_get_nv2a_cadence(float *flip_stalls, unsigned int *fps,
+                          bool *fps_available);
 
 // Implemented in xemu_hud.cc
 void xemu_hud_init(SDL_Window *window, void *sdl_gl_context);

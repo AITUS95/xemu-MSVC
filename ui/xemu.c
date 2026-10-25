@@ -47,6 +47,7 @@
 #include "system/system.h"
 #include "xui/xemu-hud.h"
 #include "xemu-vblank-cadence.h"
+#include "xemu-nv2a-cadence.h"
 #include "xemu-input.h"
 #include "xemu-settings.h"
 #include "xemu-snapshots.h"
@@ -57,6 +58,7 @@
 
 #include "hw/xbox/smbus.h" // For eject, drive tray
 #include "hw/xbox/nv2a/nv2a.h"
+#include "hw/xbox/nv2a/debug.h"
 #include "ui/xemu-notifications.h"
 
 #include <stb_image.h>
@@ -873,12 +875,43 @@ static float update_avg(float avg, float ms, float r) {
  * under the existing BQL.
  */
 static XemuVBlankCadence g_vblank_cadence;
+static XemuNV2ACadence g_nv2a_cadence;
+static int64_t g_nv2a_last_poll_ns;
 
 static void vblank_cadence_vm_state_change(void *opaque, bool running,
                                            RunState state)
 {
     assert(bql_locked());
     xemu_vblank_cadence_reset(&g_vblank_cadence);
+    xemu_nv2a_cadence_reset(&g_nv2a_cadence);
+    g_nv2a_last_poll_ns = 0;
+}
+
+bool xemu_get_nv2a_cadence(float *flip_stalls, unsigned int *fps,
+                          bool *fps_available)
+{
+    assert(bql_locked());
+    if (!runstate_is_running()) {
+        return false;
+    }
+    int64_t now_ns = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+    if (!g_nv2a_last_poll_ns || now_ns < g_nv2a_last_poll_ns ||
+        now_ns - g_nv2a_last_poll_ns >= XEMU_NV2A_POLL_NS) {
+        if (now_ns < g_nv2a_last_poll_ns) {
+            xemu_nv2a_cadence_reset(&g_nv2a_cadence);
+        }
+        g_nv2a_last_poll_ns = now_ns;
+        NV2ACadenceStats stats;
+        if (nv2a_profile_get_cadence_stats(&stats)) {
+            now_ns = qemu_clock_get_ns(QEMU_CLOCK_REALTIME);
+            xemu_nv2a_cadence_sample(&g_nv2a_cadence, now_ns,
+                                     stats.flip_stall_count,
+                                     stats.increment_fps,
+                                     stats.last_increment_us);
+        }
+    }
+    return xemu_nv2a_cadence_get(&g_nv2a_cadence, now_ns, flip_stalls, fps,
+                                 fps_available);
 }
 
 bool xemu_get_vblank_cadence(float *percent, int64_t *max_deviation_ns,
