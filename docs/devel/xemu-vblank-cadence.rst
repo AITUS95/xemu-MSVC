@@ -3,9 +3,12 @@
 VBlank cadence diagnostics
 ==========================
 
-The timing overlay deliberately separates two statements::
+The timing overlay separates callback diagnostics from global speed::
 
     VBlank cadence: 100.0%
+    Host callback intervals since reset
+    Callback max deviation: 0.000 ms
+    Callback intervals >=2x nominal: 0
     Global speed: unverified
 
 The first value measures serviced VBlank callbacks against the configured
@@ -27,6 +30,13 @@ This measures callback cadence, not presentation latency, successful guest
 interrupt handling or all of the work of a simulated video frame. Uneven
 callback spacing can still average to the expected cadence.
 
+The interval diagnostics retain the maximum absolute difference between a
+completed callback interval and the nominal interval, and count intervals
+at least twice nominal (about 33.3 ms at 60 Hz, 40 ms at 50 Hz). This threshold
+is a diagnostic convention, not evidence of missed guest interrupts or
+CPU/GPU delays. Both values accumulate since the last VM state, reference,
+clock-discontinuity or invalid-input reset; they do not reset every second.
+
 The reference is the interval already configured for xemu's VBlank source.
 This patch does not change the source, video frequencies, render pacing,
 limiters, CPU speed, QEMU clocks or device synchronization. The helper can
@@ -41,6 +51,13 @@ after invalidation, and ``VBlank cadence: paused`` while paused. VM state
 changes reset the meter even if no VBlank callback observes a short pause.
 Clock regressions, repeated timestamps, reference changes and gaps longer
 than 500 ms start a fresh window. A stale reading is unavailable, not 0%.
+An interval longer than 500 ms is counted before restarting the cadence
+window, preserving its deviation and long-interval count. A pause/resume
+resets both diagnostics, so paused time is never counted as an interval.
+Interval values share cadence availability: the overlay shows ``--`` during
+warmup or a stale source. An ongoing gap is counted only when the next
+callback completes. These are host callback observations, not guest CPU/GPU
+completion times or a way to attribute the cause of a stall.
 
 The VBlank callback, VM state handler and UI getter all access the small
 meter under the existing Big QEMU Lock. No atomics, additional locks,

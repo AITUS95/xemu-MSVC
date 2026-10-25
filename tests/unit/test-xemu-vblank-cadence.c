@@ -30,6 +30,8 @@ static void test_ntsc(void)
     drive(&meter, start, ntsc, ntsc, 61);
     g_assert_cmpfloat_with_epsilon(reading(&meter, start + 61 * ntsc), 100,
                                    0.001);
+    g_assert_cmpint(meter.max_deviation_ns, ==, 0);
+    g_assert_cmpuint(meter.long_intervals, ==, 0);
 }
 
 static void test_fractional_reference(void)
@@ -47,6 +49,8 @@ static void test_pal(void)
     drive(&meter, start, pal, pal, 51);
     g_assert_cmpfloat_with_epsilon(reading(&meter, start + 51 * pal), 100,
                                    0.001);
+    g_assert_cmpint(meter.max_deviation_ns, ==, 0);
+    g_assert_cmpuint(meter.long_intervals, ==, 0);
 }
 
 static void test_half_cadence(void)
@@ -214,6 +218,134 @@ static void test_large_monotonic_time(void)
                                    0.001);
 }
 
+static void test_interval_maximum(void)
+{
+    XemuVBlankCadence meter = { 0 };
+    int64_t now = start;
+    xemu_vblank_cadence_event(&meter, now, pal, true);
+    now += pal / 4;
+    xemu_vblank_cadence_event(&meter, now, pal, true);
+    g_assert_cmpint(meter.max_deviation_ns, ==, 3 * pal / 4);
+    now += 3 * pal / 2;
+    xemu_vblank_cadence_event(&meter, now, pal, true);
+    g_assert_cmpint(meter.max_deviation_ns, ==, 3 * pal / 4);
+    g_assert_cmpuint(meter.long_intervals, ==, 0);
+    now += 2 * pal;
+    xemu_vblank_cadence_event(&meter, now, pal, true);
+    g_assert_cmpint(meter.max_deviation_ns, ==, pal);
+    for (int i = 1; i <= 100; i++) {
+        xemu_vblank_cadence_event(&meter, now + i * pal, pal, true);
+    }
+    g_assert_true(meter.valid);
+    g_assert_cmpint(meter.max_deviation_ns, ==, pal);
+    g_assert_cmpuint(meter.long_intervals, ==, 1);
+}
+
+static void test_long_interval_threshold(void)
+{
+    const int64_t periods[] = { ntsc, pal };
+    for (size_t i = 0; i < G_N_ELEMENTS(periods); i++) {
+        XemuVBlankCadence meter = { 0 };
+        int64_t period = periods[i];
+        int64_t now = start;
+        xemu_vblank_cadence_event(&meter, now, period, true);
+        now += 2 * period - 1;
+        xemu_vblank_cadence_event(&meter, now, period, true);
+        g_assert_cmpuint(meter.long_intervals, ==, 0);
+        now += 2 * period;
+        xemu_vblank_cadence_event(&meter, now, period, true);
+        g_assert_cmpuint(meter.long_intervals, ==, 1);
+        now += 2 * period + 1;
+        xemu_vblank_cadence_event(&meter, now, period, true);
+        g_assert_cmpuint(meter.long_intervals, ==, 2);
+        g_assert_cmpint(meter.max_deviation_ns, ==, period + 1);
+    }
+}
+
+static void test_interval_pause_reset(void)
+{
+    XemuVBlankCadence meter = { 0 };
+    drive(&meter, start, 2 * pal, pal, 26);
+    g_assert_cmpuint(meter.long_intervals, ==, 26);
+    g_assert_cmpint(meter.max_deviation_ns, ==, pal);
+    xemu_vblank_cadence_event(&meter, start + 53 * pal, pal, false);
+    g_assert_false(meter.valid);
+    g_assert_cmpuint(meter.long_intervals, ==, 0);
+    g_assert_cmpint(meter.max_deviation_ns, ==, 0);
+    drive(&meter, start + INT64_C(10000000000), pal, pal, 51);
+    g_assert_true(meter.valid);
+    g_assert_cmpuint(meter.long_intervals, ==, 0);
+    g_assert_cmpint(meter.max_deviation_ns, ==, 0);
+    /* VM state notifications also reset even when no callback saw the pause. */
+    xemu_vblank_cadence_event(&meter, meter.last_vblank_ns + 2 * pal, pal,
+                              true);
+    xemu_vblank_cadence_reset(&meter);
+    g_assert_cmpuint(meter.long_intervals, ==, 0);
+    g_assert_cmpint(meter.max_deviation_ns, ==, 0);
+}
+
+static void test_interval_reference_and_clock_reset(void)
+{
+    XemuVBlankCadence meter = { 0 };
+    drive(&meter, start, 2 * ntsc, ntsc, 31);
+    xemu_vblank_cadence_event(&meter, meter.last_vblank_ns + pal, pal, true);
+    g_assert_false(meter.valid);
+    g_assert_cmpuint(meter.long_intervals, ==, 0);
+    g_assert_cmpint(meter.max_deviation_ns, ==, 0);
+    xemu_vblank_cadence_event(&meter, meter.last_vblank_ns + 2 * pal, pal,
+                              true);
+    g_assert_cmpuint(meter.long_intervals, ==, 1);
+    xemu_vblank_cadence_event(&meter, start, pal, true);
+    g_assert_cmpuint(meter.long_intervals, ==, 0);
+    g_assert_cmpint(meter.max_deviation_ns, ==, 0);
+    xemu_vblank_cadence_event(&meter, start + 2 * pal, pal, true);
+    xemu_vblank_cadence_event(&meter, start + 2 * pal, pal, true);
+    g_assert_cmpuint(meter.long_intervals, ==, 0);
+    g_assert_cmpint(meter.max_deviation_ns, ==, 0);
+    xemu_vblank_cadence_event(&meter, start + 4 * pal, pal, true);
+    xemu_vblank_cadence_event(&meter, start + 5 * pal, 0, true);
+    g_assert_cmpuint(meter.long_intervals, ==, 0);
+    g_assert_cmpint(meter.max_deviation_ns, ==, 0);
+}
+
+static void test_long_stall_is_retained(void)
+{
+    XemuVBlankCadence meter = { 0 };
+    float percent = -1;
+    drive(&meter, start, pal, pal, 51);
+    int64_t restart = meter.last_vblank_ns + XEMU_VBLANK_STALE_NS + 1;
+    xemu_vblank_cadence_event(&meter, restart, pal, true);
+    g_assert_false(xemu_vblank_cadence_get(&meter, restart, &percent));
+    g_assert_cmpuint(meter.long_intervals, ==, 1);
+    g_assert_cmpint(meter.max_deviation_ns, ==, XEMU_VBLANK_STALE_NS + 1 - pal);
+    for (int i = 1; i <= 51; i++) {
+        xemu_vblank_cadence_event(&meter, restart + i * pal, pal, true);
+    }
+    g_assert_cmpfloat_with_epsilon(reading(&meter, restart + 51 * pal), 100,
+                                   0.001);
+    g_assert_cmpuint(meter.long_intervals, ==, 1);
+    g_assert_cmpint(meter.max_deviation_ns, ==, XEMU_VBLANK_STALE_NS + 1 - pal);
+}
+
+static void test_interval_arithmetic_limits(void)
+{
+    XemuVBlankCadence meter = { 0 };
+    xemu_vblank_cadence_event(&meter, 1, INT64_MAX - 1, true);
+    xemu_vblank_cadence_event(&meter, INT64_MAX, INT64_MAX - 1, true);
+    g_assert_cmpint(meter.max_deviation_ns, ==, 0);
+    g_assert_cmpuint(meter.long_intervals, ==, 0);
+    xemu_vblank_cadence_reset(&meter);
+    xemu_vblank_cadence_event(&meter, 1, pal, true);
+    xemu_vblank_cadence_event(&meter, INT64_MAX, pal, true);
+    g_assert_cmpint(meter.max_deviation_ns, ==, INT64_MAX - 1 - pal);
+    g_assert_cmpuint(meter.long_intervals, ==, 1);
+    xemu_vblank_cadence_reset(&meter);
+    xemu_vblank_cadence_event(&meter, start, pal, true);
+    meter.long_intervals = UINT64_MAX;
+    xemu_vblank_cadence_event(&meter, start + 2 * pal, pal, true);
+    g_assert_cmpuint(meter.long_intervals, ==, UINT64_MAX);
+}
+
 int main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
@@ -240,5 +372,16 @@ int main(int argc, char **argv)
                     test_burst_is_not_clamped_to_target);
     g_test_add_func("/xemu/cadence/large-monotonic-time",
                     test_large_monotonic_time);
+    g_test_add_func("/xemu/cadence/interval-maximum", test_interval_maximum);
+    g_test_add_func("/xemu/cadence/long-interval-threshold",
+                    test_long_interval_threshold);
+    g_test_add_func("/xemu/cadence/interval-pause-reset",
+                    test_interval_pause_reset);
+    g_test_add_func("/xemu/cadence/interval-reference-clock-reset",
+                    test_interval_reference_and_clock_reset);
+    g_test_add_func("/xemu/cadence/long-stall-retained",
+                    test_long_stall_is_retained);
+    g_test_add_func("/xemu/cadence/interval-arithmetic-limits",
+                    test_interval_arithmetic_limits);
     return g_test_run();
 }

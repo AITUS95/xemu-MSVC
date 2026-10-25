@@ -16,6 +16,8 @@ typedef struct XemuVBlankCadence {
     int64_t window_start_ns;
     int64_t last_vblank_ns;
     int64_t expected_interval_ns;
+    int64_t max_deviation_ns;
+    uint64_t long_intervals;
     uint32_t intervals;
     float percent;
     bool valid;
@@ -26,6 +28,8 @@ static inline void xemu_vblank_cadence_reset(XemuVBlankCadence *meter)
     meter->window_start_ns = 0;
     meter->last_vblank_ns = 0;
     meter->expected_interval_ns = 0;
+    meter->max_deviation_ns = 0;
+    meter->long_intervals = 0;
     meter->intervals = 0;
     meter->percent = 0.0f;
     meter->valid = false;
@@ -47,8 +51,7 @@ static inline void xemu_vblank_cadence_event(XemuVBlankCadence *meter,
 
     if (!meter->window_start_ns ||
         expected_interval_ns != meter->expected_interval_ns ||
-        now_ns <= meter->last_vblank_ns ||
-        now_ns - meter->last_vblank_ns > XEMU_VBLANK_STALE_NS) {
+        now_ns <= meter->last_vblank_ns) {
         xemu_vblank_cadence_reset(meter);
         meter->window_start_ns = now_ns;
         meter->last_vblank_ns = now_ns;
@@ -56,7 +59,29 @@ static inline void xemu_vblank_cadence_event(XemuVBlankCadence *meter,
         return;
     }
 
+    int64_t interval_ns = now_ns - meter->last_vblank_ns;
+    int64_t deviation_ns = interval_ns - expected_interval_ns;
+    /* Compare to twice nominal without overflowing the multiplication. */
+    if (deviation_ns >= expected_interval_ns &&
+        meter->long_intervals < UINT64_MAX) {
+        meter->long_intervals++;
+    }
+    if (deviation_ns < 0) {
+        deviation_ns = -deviation_ns;
+    }
+    if (deviation_ns > meter->max_deviation_ns) {
+        meter->max_deviation_ns = deviation_ns;
+    }
+
     meter->last_vblank_ns = now_ns;
+    if (interval_ns > XEMU_VBLANK_STALE_NS) {
+        /* Retain the long interval while restarting cadence. */
+        meter->window_start_ns = now_ns;
+        meter->intervals = 0;
+        meter->percent = 0.0f;
+        meter->valid = false;
+        return;
+    }
     meter->intervals++;
     int64_t elapsed_ns = now_ns - meter->window_start_ns;
     if (elapsed_ns < XEMU_VBLANK_WINDOW_NS) {

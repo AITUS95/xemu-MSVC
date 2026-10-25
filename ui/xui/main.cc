@@ -210,13 +210,28 @@ static void DrawTimingDiagnosticsOverlay(void)
 
     if (ImGui::Begin("##TimingDiagnosticsOverlay", nullptr, flags)) {
         float percent = 0.0f;
+        int64_t max_deviation_ns = 0;
+        uint64_t long_intervals = 0;
+        bool running = runstate_is_running();
+        bool available = running && xemu_get_vblank_cadence(
+            &percent, &max_deviation_ns, &long_intervals);
 
-        if (!runstate_is_running()) {
+        if (!running) {
             ImGui::TextUnformatted("VBlank cadence: paused");
-        } else if (xemu_get_vblank_cadence(&percent)) {
+        } else if (available) {
             ImGui::Text("VBlank cadence: %.1f%%", percent);
         } else {
             ImGui::TextUnformatted("VBlank cadence: --");
+        }
+        ImGui::TextDisabled("Host callback intervals since reset");
+        if (available) {
+            ImGui::Text("Callback max deviation: %.3f ms",
+                        (double)max_deviation_ns / 1000000.0);
+            ImGui::Text("Callback intervals >=2x nominal: %" PRIu64,
+                        long_intervals);
+        } else {
+            ImGui::TextUnformatted("Callback max deviation: --");
+            ImGui::TextUnformatted("Callback intervals >=2x nominal: --");
         }
         ImGui::TextUnformatted("Global speed: unverified");
     }

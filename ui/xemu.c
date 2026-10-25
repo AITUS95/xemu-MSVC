@@ -881,13 +881,23 @@ static void vblank_cadence_vm_state_change(void *opaque, bool running,
     xemu_vblank_cadence_reset(&g_vblank_cadence);
 }
 
-bool xemu_get_vblank_cadence(float *percent)
+bool xemu_get_vblank_cadence(float *percent, int64_t *max_deviation_ns,
+                            uint64_t *long_intervals)
 {
     assert(bql_locked());
-    return runstate_is_running() &&
-           xemu_vblank_cadence_get(&g_vblank_cadence,
-                                   qemu_clock_get_ns(QEMU_CLOCK_REALTIME),
-                                   percent);
+    if (!runstate_is_running() ||
+        !xemu_vblank_cadence_get(&g_vblank_cadence,
+                                 qemu_clock_get_ns(QEMU_CLOCK_REALTIME),
+                                 percent)) {
+        return false;
+    }
+    if (max_deviation_ns) {
+        *max_deviation_ns = g_vblank_cadence.max_deviation_ns;
+    }
+    if (long_intervals) {
+        *long_intervals = g_vblank_cadence.long_intervals;
+    }
+    return true;
 }
 
 static float fps = 1.0;
