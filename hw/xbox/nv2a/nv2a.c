@@ -21,6 +21,7 @@
 
 #include "hw/xbox/nv2a/nv2a_int.h"
 #include "qemu/main-loop.h"
+#include "hw/xbox/performance.h"
 
 void nv2a_update_irq(NV2AState *d)
 {
@@ -244,6 +245,7 @@ static void nv2a_init_memory(NV2AState *d, MemoryRegion *ram)
     /* fire up pfifo */
     qemu_thread_create(&d->pfifo.thread, "nv2a.pfifo_thread",
                        pfifo_thread, d, QEMU_THREAD_JOINABLE);
+    xemu_perf_set_thread(XEMU_PERF_NV2A, &d->pfifo.thread);
 }
 
 static void nv2a_init_vga(NV2AState *d)
@@ -371,6 +373,7 @@ static void nv2a_exitfn(PCIDevice *dev)
     NV2AState *d;
     d = NV2A_DEVICE(dev);
 
+    xemu_perf_set_thread(XEMU_PERF_NV2A, NULL);
     d->exiting = true;
 
     qemu_cond_broadcast(&d->pfifo.fifo_cond);

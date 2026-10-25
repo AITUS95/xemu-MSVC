@@ -440,7 +440,9 @@ const MemoryRegionOps ep_ops = {
     .write = ep_write,
 };
 
-void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_PER_FRAME])
+void mcpx_apu_dsp_frame(MCPXAPUState *d,
+                       float mixbins[NUM_MIXBINS][NUM_SAMPLES_PER_FRAME],
+                       XemuPerfAudioFrame *perf)
 {
     /* Write VP results to the GP DSP MIXBUF */
     for (int mixbin = 0; mixbin < NUM_MIXBINS; mixbin++) {
@@ -454,9 +456,15 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
     bool ep_enabled = (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPRST) &&
                       (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPDSPRST);
 
+    perf->ep_enabled = ep_enabled;
+    perf->gp_realtime = d->gp.realtime;
+    perf->ep_realtime = d->ep.realtime;
+
     /* Run GP */
     if ((d->gp.regs[NV_PAPU_GPRST] & NV_PAPU_GPRST_GPRST) &&
         (d->gp.regs[NV_PAPU_GPRST] & NV_PAPU_GPRST_GPDSPRST)) {
+        perf->gp_enabled = true;
+        int64_t gp_start = xemu_perf_audio_clock(perf);
         dsp_start_frame(d->gp.dsp);
         dsp_set_halt_requested(d->gp.dsp, false);
         dsp_set_cycle_count(d->gp.dsp, 0);
@@ -464,6 +472,7 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
             dsp_run(d->gp.dsp, 1000);
         } while (!dsp_get_halt_requested(d->gp.dsp) && d->gp.realtime);
         g_dbg.gp.cycles = dsp_get_cycle_count(d->gp.dsp);
+        perf->phase_us[XEMU_PERF_GP] = xemu_perf_audio_clock(perf) - gp_start;
 
         if ((d->monitor.point == MCPX_APU_DEBUG_MON_GP) ||
             (d->monitor.point == MCPX_APU_DEBUG_MON_GP_OR_EP && !ep_enabled)) {
@@ -482,6 +491,7 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
     if ((d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPRST) &&
         (d->ep.regs[NV_PAPU_EPRST] & NV_PAPU_GPRST_GPDSPRST)) {
         if (d->ep_frame_div % 8 == 0) {
+            int64_t ep_start = xemu_perf_audio_clock(perf);
             dsp_start_frame(d->ep.dsp);
             dsp_set_halt_requested(d->ep.dsp, false);
             dsp_set_cycle_count(d->ep.dsp, 0);
@@ -489,6 +499,8 @@ void mcpx_apu_dsp_frame(MCPXAPUState *d, float mixbins[NUM_MIXBINS][NUM_SAMPLES_
                 dsp_run(d->ep.dsp, 1000);
             } while (!dsp_get_halt_requested(d->ep.dsp) && d->ep.realtime);
             g_dbg.ep.cycles = dsp_get_cycle_count(d->ep.dsp);
+            perf->phase_us[XEMU_PERF_EP] =
+                xemu_perf_audio_clock(perf) - ep_start;
         }
     }
 }

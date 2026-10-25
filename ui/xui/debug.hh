@@ -41,3 +41,6 @@ public:
 
 extern DebugApuWindow apu_window;
 extern DebugVideoWindow video_window;
+
+extern bool performance_overlay_open;
+void DrawPerformanceOverlay();
