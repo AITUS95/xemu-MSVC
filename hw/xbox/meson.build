@@ -1,6 +1,7 @@
 specific_ss.add(files(
 	'acpi_xbox.c',
 	'performance.c',
+	'benchmark.c',
 	'amd_smbus.c',
 	# 'chihiro-usb.c',
 	# 'chihiro.c',
