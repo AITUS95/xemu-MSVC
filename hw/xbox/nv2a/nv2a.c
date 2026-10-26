@@ -246,6 +246,7 @@ static void nv2a_init_memory(NV2AState *d, MemoryRegion *ram)
     qemu_thread_create(&d->pfifo.thread, "nv2a.pfifo_thread",
                        pfifo_thread, d, QEMU_THREAD_JOINABLE);
     xemu_perf_set_thread(XEMU_PERF_NV2A, &d->pfifo.thread);
+    xemu_perf_set_nv2a(&d->pfifo.perf, &d->pfifo.lock);
 }
 
 static void nv2a_init_vga(NV2AState *d)
@@ -373,6 +374,7 @@ static void nv2a_exitfn(PCIDevice *dev)
     NV2AState *d;
     d = NV2A_DEVICE(dev);
 
+    xemu_perf_set_nv2a(NULL, NULL);
     xemu_perf_set_thread(XEMU_PERF_NV2A, NULL);
     d->exiting = true;
 

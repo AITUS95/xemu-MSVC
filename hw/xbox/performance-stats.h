@@ -26,11 +26,64 @@ enum XemuPerfPhase {
     XEMU_PERF_EP,
 };
 
+enum XemuPerfStall {
+    XEMU_PERF_STALL_FLIP,
+    XEMU_PERF_STALL_NOP,
+    XEMU_PERF_STALL_CONTEXT,
+    XEMU_PERF_STALL_FIFO,
+    XEMU_PERF_STALL_COUNT,
+};
+
+/* Protected by the existing PFIFO lock, not part of the guest/save state. */
+typedef struct XemuPerfNv2a {
+    unsigned generation;
+    uint64_t words;
+    uint64_t flips;
+    uint64_t stalls[XEMU_PERF_STALL_COUNT];
+    unsigned stalled;
+} XemuPerfNv2a;
+
+static inline void xemu_perf_nv2a_prepare(XemuPerfNv2a *perf,
+                                         unsigned generation)
+{
+    if (perf->generation != generation) {
+        memset(perf, 0, sizeof(*perf));
+        perf->generation = generation;
+    }
+}
+
+static inline void xemu_perf_nv2a_words(XemuPerfNv2a *perf,
+                                       unsigned generation, uint64_t words)
+{
+    if (generation && generation == perf->generation) {
+        perf->words += words;
+    }
+}
+
+static inline void xemu_perf_nv2a_stall(XemuPerfNv2a *perf,
+                                       enum XemuPerfStall reason, bool active)
+{
+    if (!perf->generation) {
+        return;
+    }
+    unsigned bit = 1u << reason;
+    if (active) {
+        if (!(perf->stalled & bit)) {
+            perf->stalls[reason]++;
+        }
+        perf->stalled |= bit;
+    } else {
+        perf->stalled &= ~bit;
+    }
+}
+
 typedef struct XemuPerfCounters {
     int64_t time_us;
     unsigned generation;
     uint64_t audio_generation;
     int64_t cpu_ns[XEMU_PERF_THREADS]; /* -1 if unavailable */
+    XemuPerfNv2a nv2a;
+    bool nv2a_valid;
     uint64_t sample_frames;
     uint64_t phase_us[XEMU_PERF_PHASES];
     int64_t audio_updated_us;
@@ -43,6 +96,12 @@ typedef struct XemuPerfResult {
     bool ready;
     bool cpu_valid[XEMU_PERF_THREADS];
     double cpu_percent[XEMU_PERF_THREADS];
+    bool speed_valid[XEMU_PERF_THREADS];
+    double speed_percent[XEMU_PERF_THREADS];
+    bool nv2a_valid;
+    double nv2a_words_per_second;
+    double nv2a_flips_per_second;
+    double nv2a_stalls_per_second[XEMU_PERF_STALL_COUNT];
     bool audio_valid;
     bool audio_stale;
     double audio_percent;
@@ -63,24 +122,68 @@ enum XemuPerfRateBand {
     XEMU_PERF_RATE_FAST,
 };
 
-/* A completed audio cadence is not a measurement of overall game speed. */
+/* Validity is independent of host load; APU speed means audio cadence only. */
 static inline enum XemuPerfRateBand
-xemu_perf_audio_rate_band(const XemuPerfResult *stats)
+xemu_perf_speed_band(const XemuPerfResult *stats, enum XemuPerfThread component)
 {
-    if (!stats->current.generation || !stats->ready || !stats->audio_valid ||
-        !stats->current.audio_active || stats->audio_stale ||
-        !stats->current.gp_enabled || !stats->current.ep_enabled ||
-        !stats->current.gp_realtime || !stats->current.ep_realtime ||
-        !(stats->audio_percent >= 0 && stats->audio_percent <= DBL_MAX)) {
+    if ((unsigned)component >= XEMU_PERF_THREADS ||
+        !stats->current.generation || !stats->ready ||
+        !stats->speed_valid[component]) {
         return XEMU_PERF_RATE_UNAVAILABLE;
     }
-    if (stats->audio_percent < 95.0) {
+    if (component == XEMU_PERF_APU &&
+        (!stats->audio_valid || !stats->current.audio_active ||
+         stats->audio_stale || !stats->current.gp_enabled ||
+         !stats->current.ep_enabled || !stats->current.gp_realtime ||
+         !stats->current.ep_realtime)) {
+        return XEMU_PERF_RATE_UNAVAILABLE;
+    }
+    double percent = stats->speed_percent[component];
+    if (!(percent >= 0 && percent <= DBL_MAX)) {
+        return XEMU_PERF_RATE_UNAVAILABLE;
+    }
+    if (percent < 95.0) {
         return XEMU_PERF_RATE_SLOW;
     }
-    if (stats->audio_percent > 105.0) {
+    if (percent > 105.0) {
         return XEMU_PERF_RATE_FAST;
     }
     return XEMU_PERF_RATE_NORMAL;
+}
+
+static inline enum XemuPerfRateBand
+xemu_perf_audio_rate_band(const XemuPerfResult *stats)
+{
+    return xemu_perf_speed_band(stats, XEMU_PERF_APU);
+}
+
+static inline void xemu_perf_nv2a_compare(XemuPerfResult *result,
+                                         const XemuPerfCounters *before,
+                                         const XemuPerfCounters *after,
+                                         int64_t elapsed)
+{
+    if (!before->nv2a_valid || !after->nv2a_valid ||
+        before->nv2a.generation != after->generation ||
+        after->nv2a.generation != after->generation ||
+        after->nv2a.words < before->nv2a.words ||
+        after->nv2a.flips < before->nv2a.flips) {
+        return;
+    }
+    for (unsigned i = 0; i < XEMU_PERF_STALL_COUNT; i++) {
+        if (after->nv2a.stalls[i] < before->nv2a.stalls[i]) {
+            return;
+        }
+    }
+    double seconds = elapsed / 1000000.0;
+    result->nv2a_valid = true;
+    result->nv2a_words_per_second =
+        (after->nv2a.words - before->nv2a.words) / seconds;
+    result->nv2a_flips_per_second =
+        (after->nv2a.flips - before->nv2a.flips) / seconds;
+    for (unsigned i = 0; i < XEMU_PERF_STALL_COUNT; i++) {
+        result->nv2a_stalls_per_second[i] =
+            (after->nv2a.stalls[i] - before->nv2a.stalls[i]) / seconds;
+    }
 }
 
 /* Pure reducer: shared by the UI sampler and deterministic unit tests. */
@@ -102,6 +205,7 @@ static inline XemuPerfResult xemu_perf_compare(const XemuPerfCounters *before,
                 (after->cpu_ns[i] - before->cpu_ns[i]) / (10.0 * elapsed);
         }
     }
+    xemu_perf_nv2a_compare(&result, before, after, elapsed);
     result.audio_stale =
         after->audio_active &&
         (after->audio_updated_us <= 0 ||
@@ -124,6 +228,10 @@ static inline XemuPerfResult xemu_perf_compare(const XemuPerfCounters *before,
         (after->sample_frames - before->sample_frames) * (1000000.0 / 48000);
     result.audio_valid = true;
     result.audio_percent = 100.0 * audio_us / elapsed;
+    result.speed_valid[XEMU_PERF_APU] =
+        after->gp_enabled && after->ep_enabled &&
+        after->gp_realtime && after->ep_realtime;
+    result.speed_percent[XEMU_PERF_APU] = result.audio_percent;
     result.audio_budget_percent =
         100.0 * (after->phase_us[0] - before->phase_us[0]) / audio_us;
     for (unsigned i = 0; i < XEMU_PERF_PHASES; i++) {

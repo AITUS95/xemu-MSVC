@@ -113,6 +113,10 @@ void pgraph_write(void *opaque, hwaddr addr, uint64_t val, unsigned int size)
                               NV_PGRAPH_SURFACE_READ_3D)+1)
                         % PG_GET_MASK(NV_PGRAPH_SURFACE,
                                    NV_PGRAPH_SURFACE_MODULO_3D) );
+            xemu_perf_nv2a_prepare(&d->pfifo.perf, xemu_perf_generation());
+            if (d->pfifo.perf.generation) {
+                d->pfifo.perf.flips++;
+            }
             nv2a_profile_increment();
             pfifo_kick(d);
         }

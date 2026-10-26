@@ -5,6 +5,7 @@
 #include "hw/xbox/performance-stats.h"
 
 typedef struct QemuThread QemuThread;
+typedef struct QemuMutex QemuMutex;
 
 typedef struct XemuPerfAudioFrame {
     unsigned generation;
@@ -20,6 +21,10 @@ void xemu_perf_invalidate(void);
 void xemu_perf_set_thread(enum XemuPerfThread id, QemuThread *thread);
 void xemu_perf_set_enabled(bool enabled);
 XemuPerfResult xemu_perf_sample(void);
+void xemu_perf_set_nv2a(XemuPerfNv2a *source, QemuMutex *mutex);
+
+/* Atomic session token; no clock read or lock in producer paths. */
+unsigned xemu_perf_generation(void);
 
 /* APU worker only. A generation token rejects work spanning resets/pauses. */
 XemuPerfAudioFrame xemu_perf_audio_begin(void);

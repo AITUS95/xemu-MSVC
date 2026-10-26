@@ -16,6 +16,8 @@ static XemuPerfCounters counters;
 static XemuPerfHistory history;
 static XemuPerfResult cached;
 static int64_t last_sample_us;
+static XemuPerfNv2a *nv2a_source;
+static QemuMutex *nv2a_mutex;
 
 void xemu_perf_invalidate(void)
 {
@@ -57,6 +59,19 @@ void xemu_perf_set_thread(enum XemuPerfThread id, QemuThread *thread)
     assert(bql_locked());
     assert(id < XEMU_PERF_THREADS);
     threads[id] = thread;
+    xemu_perf_invalidate();
+}
+
+unsigned xemu_perf_generation(void)
+{
+    return qatomic_read(&generation);
+}
+
+void xemu_perf_set_nv2a(XemuPerfNv2a *source, QemuMutex *mutex)
+{
+    assert(bql_locked());
+    nv2a_source = source;
+    nv2a_mutex = mutex;
     xemu_perf_invalidate();
 }
 
@@ -109,6 +124,13 @@ XemuPerfResult xemu_perf_sample(void)
     XemuPerfCounters sample = counters;
     g_mutex_unlock(&lock);
     sample.time_us = now;
+    /* Never wait for the GPU worker while holding the BQL. */
+    if (sample.generation && nv2a_source &&
+        qemu_mutex_trylock(nv2a_mutex) == 0) {
+        sample.nv2a = *nv2a_source;
+        sample.nv2a_valid = sample.nv2a.generation == sample.generation;
+        qemu_mutex_unlock(nv2a_mutex);
+    }
     QemuThread *cpu_thread =
         first_cpu && first_cpu->created ? first_cpu->thread : NULL;
     sample.cpu_ns[XEMU_PERF_CPU] = thread_cpu_ns(cpu_thread);

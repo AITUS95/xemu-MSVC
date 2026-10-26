@@ -48,6 +48,7 @@
 #include "trace.h"
 
 #include "nv2a.h"
+#include "hw/xbox/performance.h"
 #include "pgraph/pgraph.h"
 #include "debug.h"
 #include "nv2a_regs.h"
@@ -101,6 +102,7 @@ typedef struct NV2AState {
         QemuThread thread;
         QemuCond fifo_cond;
         QemuCond fifo_idle_cond;
+        XemuPerfNv2a perf;
         bool fifo_kick;
         bool halt;
     } pfifo;

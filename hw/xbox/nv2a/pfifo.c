@@ -145,9 +145,24 @@ static bool pfifo_stall_for_flip(NV2AState *d)
 
 static bool pfifo_puller_should_stall(NV2AState *d)
 {
-    return pfifo_stall_for_flip(d) || qatomic_read(&d->pgraph.waiting_for_nop) ||
-           qatomic_read(&d->pgraph.waiting_for_context_switch) ||
-           !can_fifo_access(d);
+    bool stalled = pfifo_stall_for_flip(d);
+    xemu_perf_nv2a_stall(&d->pfifo.perf, XEMU_PERF_STALL_FLIP, stalled);
+    if (stalled) {
+        return true;
+    }
+    stalled = qatomic_read(&d->pgraph.waiting_for_nop);
+    xemu_perf_nv2a_stall(&d->pfifo.perf, XEMU_PERF_STALL_NOP, stalled);
+    if (stalled) {
+        return true;
+    }
+    stalled = qatomic_read(&d->pgraph.waiting_for_context_switch);
+    xemu_perf_nv2a_stall(&d->pfifo.perf, XEMU_PERF_STALL_CONTEXT, stalled);
+    if (stalled) {
+        return true;
+    }
+    stalled = !can_fifo_access(d);
+    xemu_perf_nv2a_stall(&d->pfifo.perf, XEMU_PERF_STALL_FIFO, stalled);
+    return stalled;
 }
 
 static ssize_t pfifo_run_puller(NV2AState *d, uint32_t method_entry,
@@ -248,12 +263,20 @@ static ssize_t pfifo_run_puller(NV2AState *d, uint32_t method_entry,
 
 static bool pfifo_pusher_should_stall(NV2AState *d)
 {
-    return !can_fifo_access(d) ||
-           qatomic_read(&d->pgraph.waiting_for_nop);
+    bool stalled = !can_fifo_access(d);
+    xemu_perf_nv2a_stall(&d->pfifo.perf, XEMU_PERF_STALL_FIFO, stalled);
+    if (stalled) {
+        return true;
+    }
+    stalled = qatomic_read(&d->pgraph.waiting_for_nop);
+    xemu_perf_nv2a_stall(&d->pfifo.perf, XEMU_PERF_STALL_NOP, stalled);
+    return stalled;
 }
 
 static void pfifo_run_pusher(NV2AState *d)
 {
+    unsigned perf_generation = xemu_perf_generation();
+    xemu_perf_nv2a_prepare(&d->pfifo.perf, perf_generation);
     uint32_t *push0 = &d->pfifo.regs[NV_PFIFO_CACHE1_PUSH0];
     uint32_t *push1 = &d->pfifo.regs[NV_PFIFO_CACHE1_PUSH1];
     uint32_t *dma_subroutine = &d->pfifo.regs[NV_PFIFO_CACHE1_DMA_SUBROUTINE];
@@ -357,6 +380,8 @@ static void pfifo_run_pusher(NV2AState *d)
                      method_count - MIN(method_count, num_words_processed));
 
             (*dma_dcount) += num_words_processed;
+            xemu_perf_nv2a_words(&d->pfifo.perf, perf_generation,
+                                 num_words_processed);
         } else {
             /* no command active - this is the first word of a new one */
             d->pfifo.regs[NV_PFIFO_CACHE1_DMA_RSVD_SHADOW] = word;
