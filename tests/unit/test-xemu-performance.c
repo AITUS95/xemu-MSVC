@@ -277,9 +277,92 @@ static void test_nv2a_stall_transitions(void)
     assert(p.words == 0);
 }
 
+
+static void test_host_pressure_colors(void)
+{
+    XemuPerfResult r = { 0 };
+    r.current.generation = 1;
+    r.ready = true;
+    r.cpu_valid[XEMU_PERF_CPU] = true;
+    r.cpu_percent[XEMU_PERF_CPU] = 96.8;
+    assert(xemu_perf_host_pressure_band(&r, XEMU_PERF_CPU) ==
+           XEMU_PERF_RATE_SLOW);
+    r.cpu_percent[XEMU_PERF_CPU] = 8.0;
+    assert(xemu_perf_host_pressure_band(&r, XEMU_PERF_CPU) ==
+           XEMU_PERF_RATE_FAST);
+    r.cpu_percent[XEMU_PERF_CPU] = 75.0;
+    assert(xemu_perf_host_pressure_band(&r, XEMU_PERF_CPU) ==
+           XEMU_PERF_RATE_NORMAL);
+    r.cpu_percent[XEMU_PERF_CPU] = NAN;
+    assert(xemu_perf_host_pressure_band(&r, XEMU_PERF_CPU) ==
+           XEMU_PERF_RATE_UNAVAILABLE);
+    r.cpu_percent[XEMU_PERF_CPU] = 96.8;
+    r.cpu_valid[XEMU_PERF_CPU] = false;
+    assert(xemu_perf_host_pressure_band(&r, XEMU_PERF_CPU) ==
+           XEMU_PERF_RATE_UNAVAILABLE);
+    r.cpu_valid[XEMU_PERF_CPU] = true;
+    r.ready = false;
+    assert(xemu_perf_host_pressure_band(&r, XEMU_PERF_CPU) ==
+           XEMU_PERF_RATE_UNAVAILABLE);
+    r.ready = true;
+    /* CPU speed stays unknown regardless of this *host* pressure indicator. */
+    assert(xemu_perf_speed_band(&r, XEMU_PERF_CPU) ==
+           XEMU_PERF_RATE_UNAVAILABLE);
+}
+
+static void test_trend_row_colors(void)
+{
+    XemuPerfTrend pfifo = { 0 }, flips = { 0 }, stalls = { 0 };
+    for (unsigned i = 0; i < 5; i++) {
+        enum XemuPerfRateBand a =
+            xemu_perf_trend_band(&pfifo, XEMU_PERF_TREND_PFIFO, true, 2200000);
+        enum XemuPerfRateBand b =
+            xemu_perf_trend_band(&flips, XEMU_PERF_TREND_FLIPS, true, 25);
+        enum XemuPerfRateBand c =
+            xemu_perf_trend_band(&stalls, XEMU_PERF_TREND_STALLS, true, 75);
+        if (i < 4) {
+            assert(a == XEMU_PERF_RATE_UNAVAILABLE);
+            assert(b == XEMU_PERF_RATE_UNAVAILABLE);
+            assert(c == XEMU_PERF_RATE_UNAVAILABLE);
+        } else {
+            assert(a == XEMU_PERF_RATE_FAST);
+            assert(b == XEMU_PERF_RATE_FAST);
+            assert(c == XEMU_PERF_RATE_FAST);
+        }
+    }
+    assert(xemu_perf_trend_band(&pfifo, XEMU_PERF_TREND_PFIFO,
+                                true, 800000) == XEMU_PERF_RATE_SLOW);
+    assert(xemu_perf_trend_band(&flips, XEMU_PERF_TREND_FLIPS,
+                                true, 10) == XEMU_PERF_RATE_SLOW);
+    assert(xemu_perf_trend_band(&stalls, XEMU_PERF_TREND_STALLS,
+                                true, 150) == XEMU_PERF_RATE_SLOW);
+    double original = pfifo.reference;
+    assert(xemu_perf_trend_band(&pfifo, XEMU_PERF_TREND_PFIFO,
+                                false, 0) == XEMU_PERF_RATE_UNAVAILABLE);
+    assert(xemu_perf_trend_band(&pfifo, XEMU_PERF_TREND_PFIFO,
+                                true, NAN) == XEMU_PERF_RATE_UNAVAILABLE);
+    near(pfifo.reference, original);
+    XemuPerfTrend idle = { 0 };
+    for (unsigned i = 0; i < 6; ++i) {
+        assert(xemu_perf_trend_band(&idle, XEMU_PERF_TREND_FLIPS, true, 0)
+               == XEMU_PERF_RATE_UNAVAILABLE);
+    }
+    /* Zero stalls is green after warm-up, not an alert. */
+    XemuPerfTrend no_stalls = { 0 };
+    for (unsigned i = 0; i < 4; i++) {
+        assert(xemu_perf_trend_band(&no_stalls, XEMU_PERF_TREND_STALLS,
+                                    true, 0) == XEMU_PERF_RATE_UNAVAILABLE);
+    }
+    assert(xemu_perf_trend_band(&no_stalls, XEMU_PERF_TREND_STALLS,
+                                true, 0) == XEMU_PERF_RATE_FAST);
+    /* A burst from zero is flagged only when substantial. */
+    assert(xemu_perf_trend_band(&no_stalls, XEMU_PERF_TREND_STALLS,
+                                true, 18) == XEMU_PERF_RATE_SLOW);
+}
+
 int main(void)
 {
-    puts("TAP version 13\n1..7");
+    puts("TAP version 13\n1..9");
     test_rates();
     puts("ok 1 - rates and irregular intervals");
     test_invalid_samples();
@@ -294,5 +377,9 @@ int main(void)
     puts("ok 6 - NV2A throughput, snapshot validity and discontinuities");
     test_nv2a_stall_transitions();
     puts("ok 7 - stall transitions and collection generations");
+    test_host_pressure_colors();
+    puts("ok 8 - host load indication never fabricates CPU speed");
+    test_trend_row_colors();
+    puts("ok 9 - PFIFO, flips and stall row trend colors");
     return 0;
 }
