@@ -25,13 +25,10 @@ fresh window, an active pipeline and both GP and EP enabled in realtime mode.
 Limited or disabled DSP execution cannot earn a colored "100%". Configurations
 that legitimately use GP alone are conservatively `N/D` in this version.
 
-Only the trusted APU rate percentage receives speed colors:
-
-- Red below 95%.
-- White from 95% through 105%, inclusive.
-- Green above 105%.
-
-Labels, unavailable values, status and host percentages remain neutral gray.
+The underlying calibrated APU speed-band thresholds remain red below 95%,
+normal between 95% and 105%, and fast above 105%. The whole-row glow treats
+both normal and fast as green. CPU/NV2A fallback and NV2A trend colors are
+explained below.
 Host CPU percentages indicate consumption of one host core (100%), not Xbox
 speed. They are read using `GetThreadTimes` on Windows and a thread CPU clock
 on Linux; unsupported hosts/clock failures show `N/D`. NV2A host load is not
@@ -70,7 +67,7 @@ TSC and NV2A PTIMER derive from virtual time, so neither supplies a measured
 hardware-relative work rate. The supplied `deep-research-report.md` informed
 these choices; no hardware timing baseline is assumed.
 
-Two additional neutral-gray OSD lines show:
+Additional OSD diagnostics show:
 
 - **PFIFO Mword/s**: completed method-data words at the existing DMA_DCOUNT
   update, excluding pushbuffer headers, jumps and calls. It is not a byte rate,
@@ -106,16 +103,49 @@ The source is unregistered before device teardown; counters are not migrated.
 No submitted-work/backlog estimate is inferred from GET/PUT subtraction because
 pushbuffer control flow and wrapping do not provide a reliable linear queue.
 
+
+## Whole-row glow (experimental)
+
+The OSD illuminates the entire row (both text and a faint pulsating
+background). Red signals a warning, green signals a favorable *indicator*, and
+unavailable data stays neutral gray. PFIFO and flips have their own rows, so
+their state can differ; Stalls/s remains one row for all four entry categories.
+
+- APU uses the validated audio cadence: red below 95%, green at or above 95%
+  (including 95–105% nominal). Disabled/stale DSP measurements remain gray.
+- CPU and NV2A prioritize calibrated speed if ever available. Until such a
+  reference exists, the entire row may glow according to **host-thread
+  pressure only**: red at or above 90% of one core, green at or below 60%,
+  neutral between. An on-screen note explicitly says this is host load,
+  **not** speed. No speed percent is inferred and `N/D` remains unchanged.
+- PFIFO and flips show changes relative to their own recent, slowly adapting
+  reference, never an absolute hardware target. Once five distinct valid
+  samples have arrived, PFIFO dropping below 70% of its reference or flips
+  below 75% makes the row red. Stable rates show green. Very low activity
+  stays gray rather than being reported as an error.
+- Stalls/s glows red only when observed stall *entries* surge over
+  1.8× the recent level + 5/s, with at least 12/s. Otherwise it shows
+  green after warm-up. High but stable stall counts can be normal.
+- Invalid/paused/collecting counters remove illumination. History resets
+  on performance generation changes; cached frames do not advance history.
+  The 250ms UI sampling cadence, telemetry locks and emulation timing stay
+  unchanged.
+
+These colors are **trends and host-load hints, not a diagnostic pass/fail or
+a measured Xbox emulation-speed percentage**. Scene transitions, menus, game
+speed changes and naturally paced stalls can cause temporary red rows.
+
 ## Tests
 
 The existing `tests/unit/test-xemu-performance.c` covers rates, irregular
 intervals, values over 100%, stale/invalid samples and rolling-window resets.
-The fourth TAP group checks the color boundaries (including exactly 95/105),
+The fourth TAP group checks the rate-band boundaries (including exactly 95/105),
 invalid/non-finite rates, pause/warm-up/inactive/stale states, disabled/limited
 DSPs and independence from host utilization. Three additional groups check
 that uncalibrated speed stays unavailable, NV2A rates use actual durations and
 reject invalid snapshots/wraps, and stall counts are independent of poll count
-(including disabled collection and cross-generation batches). It can also run
+(including disabled collection and cross-generation batches). Two more groups
+check host-pressure validity and whole-row trend-band behavior. It can also run
 standalone:
 
 ```sh
