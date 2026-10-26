@@ -134,3 +134,17 @@ testfloat) and NV2A M2MF with OSD off/on. Compare both failures and suppressed
 failures with the base commit; a green summary alone is insufficient. Use the
 same XBE/output checks on real Xbox hardware for any future timing baseline.
 Do not gate CI on a hardware-relative speed threshold for variable cloud hosts.
+
+## Hardware benchmark collection pilot
+
+The optional [Xbox benchmark kit](../../tools/xbox-benchmark/README.md) collects
+fixed CPU workloads and NV2A clear/submission/completion workloads in one
+unattended session. Its `xbox-benchmark` device is instantiated only with an
+explicit `-device` option and records monotonic host durations at benchmark
+boundaries. It does not instrument gameplay or feed the OSD. The offline
+comparator rejects incompatible, incomplete, incorrect, short or unstable data.
+
+Hardware volunteers must first validate the pilot XBE on stock consoles. Even
+with those baselines, per-benchmark ratios are not live CPU/NV2A game-speed
+percentages. The current N/D fields therefore remain correct; a broader model
+would require independent validation and an explicit estimation label.
