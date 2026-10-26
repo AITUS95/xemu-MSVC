@@ -191,7 +191,9 @@ void DrawPerformanceOverlay()
     for (unsigned i = 0; i < XEMU_PERF_THREADS; i++) {
         enum XemuPerfRateBand band = row_bands[i];
         ImU32 color = RowTextColor(band);
-        DrawRowGlow(draw, pos, width * scale, row_height, scale, band);
+        const float columns_width =
+            (label_width + rate_width + host_width + 2 * size) * scale;
+        DrawRowGlow(draw, pos, columns_width, row_height, scale, band);
         DrawOsdText(draw, font, size * scale, pos, color, labels[i]);
         DrawOsdText(draw, font, size * scale,
                     ImVec2(pos.x + (label_width + size) * scale, pos.y),
@@ -204,7 +206,8 @@ void DrawPerformanceOverlay()
     const char *lines[] = { pfifo, flips, stalls };
     for (unsigned i = 0; i < XEMU_PERF_TREND_COUNT; i++) {
         enum XemuPerfRateBand band = trend_bands[i];
-        DrawRowGlow(draw, pos, width * scale, row_height, scale, band);
+        DrawRowGlow(draw, pos, ImGui::CalcTextSize(lines[i]).x * scale,
+                    row_height, scale, band);
         DrawOsdText(draw, font, size * scale, pos, RowTextColor(band), lines[i]);
         pos.y += row_height;
     }
