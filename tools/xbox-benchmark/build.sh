@@ -9,8 +9,9 @@ if [[ ! -d "$NXDK_DIR/.git" ]]; then
 fi
 git -C "$NXDK_DIR" checkout --detach "$sdk_revision"
 git -C "$NXDK_DIR" submodule update --init --depth 1 \
-    lib/pdclib lib/net/lwip lib/usb/libusbohci tools/extract-xiso \
+    lib/libcxx lib/pdclib lib/net/lwip lib/usb/libusbohci tools/extract-xiso \
     lib/zlib lib/libpng/libpng lib/libjpeg/libjpeg-turbo
 export PATH="$NXDK_DIR/bin:$PATH"
+python3 "$suite_dir/prepare_upstream.py"
 make -C "$suite_dir" -j"${JOBS:-4}"
 python3 "$suite_dir/package.py" --nxdk "$NXDK_DIR"

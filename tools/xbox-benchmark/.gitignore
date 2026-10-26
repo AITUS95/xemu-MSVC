@@ -7,3 +7,7 @@ bin/
 package/
 __pycache__/
 *.zip
+.upstream/
+generated/
+generated.mk
+*.cpp.d

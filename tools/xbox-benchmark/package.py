@@ -31,6 +31,7 @@ for name in (
     "VALIDATION.md",
     "VOLUNTEER-NOTES.txt",
     "compare.py",
+    "compare_campaign.py",
 ):
     shutil.copy2(root / name, package / name)
 
@@ -84,12 +85,17 @@ for relative in (
     path = repo / relative
     files = sorted(path.iterdir()) if path.is_dir() else [path]
     for item in files:
-        if not item.is_file() or item.suffix in (
-            ".obj",
-            ".d",
-            ".exe",
-            ".iso",
-            ".zip",
+        if (
+            not item.is_file()
+            or item.name == "generated.mk"
+            or item.suffix
+            in (
+                ".obj",
+                ".d",
+                ".exe",
+                ".iso",
+                ".zip",
+            )
         ):
             continue
         rel = item.relative_to(repo)
@@ -97,11 +103,22 @@ for relative in (
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(item, target)
         source_hash.update(str(rel).encode() + b"\0" + item.read_bytes())
+shutil.copytree(
+    root / "generated",
+    package / "source/upstream",
+    ignore=shutil.ignore_patterns("*.obj", "*.d"),
+)
 shutil.copy2(repo / "COPYING", package / "COPYING")
 shutil.copytree(args.nxdk / "LICENSES", package / "nxdk-licenses")
 binary = (package / "default.xbe").read_bytes()
 manifest = {
-    "suite": "xbox-benchmark-pilot-1",
+    "suite": "xbox-benchmark-pilot-2",
+    "upstream_catalog": json.loads(
+        (root / "generated/catalog.json").read_text()
+    ),
+    "upstream_sources": json.loads(
+        (root / "generated/sources.json").read_text()
+    )["pins"],
     "status": "experimental-pilot-no-hardware-baseline",
     "xbe_sha256": hashlib.sha256(binary).hexdigest(),
     "xbe_crc32": f"{zlib.crc32(binary):08x}",
@@ -124,7 +141,8 @@ manifest = {
     ).splitlines()[0],
     "flags": (
         "-O2 -Wall -Wextra -Werror -fno-vectorize "
-        "-fno-slp-vectorize; nxdk pentium3 target"
+        "-fno-slp-vectorize (base C); -O2 -std=c++17 -fno-strict-aliasing "
+        "(extension C++); upstream assembly flags; nxdk pentium3 target"
     ),
 }
 (package / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")

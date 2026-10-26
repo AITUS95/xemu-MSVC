@@ -9,12 +9,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include "kernels.h"
+#include "extended.h"
 #include "../../hw/xbox/benchmark-clock.h"
 
 #define TRIALS 7
 #define MAX_CASES 40
 #define RESULT_DIR "E:\\XBench"
-#define SUITE "xbox-benchmark-pilot-1"
+#define SUITE "xbox-benchmark-pilot-2"
 
 typedef struct BenchCase {
     unsigned kind;
@@ -48,6 +49,24 @@ static uint64_t stamp(void)
                      :
                      : "ebx", "ecx", "memory");
     return ((uint64_t)hi << 32) | lo;
+}
+
+uint64_t bench_begin(unsigned *seq)
+{
+    *seq = ++sequence;
+    if (host_mode) {
+        out32(XEMU_BENCHMARK_PORT, XEMU_BENCHMARK_BEGIN | *seq);
+    }
+    return stamp();
+}
+
+uint64_t bench_end(unsigned seq)
+{
+    uint64_t end = stamp();
+    if (host_mode) {
+        out32(XEMU_BENCHMARK_PORT, seq);
+    }
+    return end;
 }
 
 static uint32_t crc32(uint32_t crc, const void *data, size_t length)
@@ -210,7 +229,7 @@ static void finish(const char *message)
 int main(void)
 {
     XVideoSetMode(640, 480, 32, 60);
-    debugPrint("Xbox Benchmark PILOT 1\nAutomatic run. Do not pause.\n");
+    debugPrint("Xbox Benchmark PILOT 2\nAutomatic run. Do not pause.\n");
     FILE *mode = fopen("D:\\XEMU.TXT", "r");
     host_mode = mode != NULL;
     if (mode) {
@@ -251,10 +270,12 @@ int main(void)
         out32(XEMU_BENCHMARK_PORT + 4, time.LowPart);
         out32(XEMU_BENCHMARK_PORT + 8, time.HighPart);
     }
-    fprintf(output, "# %s,%08x%08x,%s,%08x,%u,%llu\n", SUITE,
-            (unsigned)time.HighPart, (unsigned)time.LowPart,
-            host_mode ? "xemu" : "hardware-unverified", binary_crc, binary_size,
-            (unsigned long long)frequency.QuadPart);
+    char header[256];
+    snprintf(header, sizeof(header), "# %s,%08x%08x,%s,%08x,%u,%llu\n", SUITE,
+             (unsigned)time.HighPart, (unsigned)time.LowPart,
+             host_mode ? "xemu" : "hardware-unverified", binary_crc,
+             binary_size, (unsigned long long)frequency.QuadPart);
+    fputs(header, output);
     fputs("seq,case,trial,kind,iterations,words,width,height,tsc_start,tsc_end,"
           "tsc,ticks_ms,checksum,ok\n",
           output);
@@ -318,8 +339,11 @@ int main(void)
     }
     fputs("# complete\n", output);
     fflush(output);
-    finish(ferror(output) ?
-               "Write failed." :
-               "COMPLETE. Please share the CSV and console details.");
+    if (ferror(output) || !bench_extended_run(name, header)) {
+        finish("INCOMPLETE. Preserve all partial files.");
+    }
+    finish(ferror(output) ? "Write failed." :
+                            "COMPLETE collection. Share both CSVs, validation "
+                            "JSON and console details.");
     return 0;
 }

@@ -10,7 +10,7 @@ from pathlib import Path
 import statistics
 import zlib
 
-SUITE = "xbox-benchmark-pilot-1"
+SUITE = "xbox-benchmark-pilot-2"
 TRIALS = 7
 FIELDS = (
     "seq,case,trial,kind,iterations,words,width,height,"

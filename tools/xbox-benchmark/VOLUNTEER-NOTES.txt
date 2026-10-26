@@ -1,6 +1,6 @@
 SPDX-License-Identifier: GPL-2.0-or-later
 
-Xbox benchmark pilot 1 — include with your unedited CSV
+Xbox benchmark pilot 2 — include with both unedited CSVs and the validation JSON
 
 Collector alias (no real name required):
 Console revision (1.0–1.6, or unknown):

@@ -1,7 +1,7 @@
 <!--
 SPDX-License-Identifier: GPL-2.0-or-later
 -->
-# Xbox benchmark pilot 1
+# Xbox benchmark pilot 2
 
 This is an **experimental collection kit**, not a calibrated CPU/GPU speed meter.
 Use a small pilot group first. A successful build is not proof that the XBE works
@@ -18,9 +18,13 @@ on every original Xbox revision. Keep failed/partial runs too.
    deve ancora essere caratterizzata su hardware; riserva circa 15 minuti.
 4. Torna al dashboard e recupera tutti i file in `E:\\XBench` tramite il normale
    metodo di trasferimento file/FTP della tua console. Il test non invia dati.
-5. Condividi il CSV e `VOLUNTEER-NOTES.txt` compilato sulla PR #8. In caso di
-   blocco/FAILED, conserva il CSV parziale e indica l'ultima riga visibile.
+5. Condividi i due CSV e il JSON di validazione (stesso nome di sessione), più `VOLUNTEER-NOTES.txt` compilato sulla PR #8. In caso di
+   blocco/FAILED, conserva tutti i file parziali e indica l'ultima riga visibile.
    Non condividere EEPROM, chiavi, seriali, BIOS o immagini del disco.
+
+**COMPLETE indica che la raccolta è terminata, non che tutti i test siano passati.**
+Se non termina entro 15 minuti, annota l’ultima schermata e conserva i file
+parziali; non è necessario ripetere continuamente i test.
 
 Vengono scritti soltanto risultati in `E:\\XBench`; file con lo stesso nome non
 vengono sovrascritti. Il benchmark non aggiorna firmware e non cambia clock.
@@ -31,7 +35,8 @@ Use an original Xbox already able to run homebrew, preferably stock clocks and
 64 MB RAM. Copy `default.xbe` to a new application folder and launch it from your
 dashboard. Do **not** add `XEMU.TXT` on real hardware. Leave it running until
 COMPLETE; allow a provisional 15-minute slot (hardware duration is not yet known).
-Retrieve the CSV files from `E:\\XBench` using your usual dashboard/FTP workflow.
+COMPLETE means collection finished, not that all checks passed.
+Retrieve both CSV files and the validation JSON (preserve their matching names) from `E:\\XBench` using your usual dashboard/FTP workflow.
 Submit them with the filled-in `VOLUNTEER-NOTES.txt` to
 [PR #8](https://github.com/AITUS95/xemu-MSVC/pull/8). No network service or telemetry
 is started by the application. Do not upload EEPROM/keys/serials/BIOS/disk images.
@@ -39,8 +44,10 @@ If it stops or fails, retain the partial file and report the last screen message
 
 ## What a session captures
 
-34 cases, each with one full warm-up and seven measured repetitions (272 rows).
-Each round uses a fixed shuffled order to spread thermal/order effects. Work
+The original base section has 34 cases, each with one full warm-up and seven
+measured repetitions (272 rows). The extension adds 29 cases (232 rows) and
+30 validation families, described below.
+Each base round uses a fixed shuffled order to spread thermal/order effects. Work
 counts are fixed across machines, not adapted to whichever machine runs first.
 All raw rows, including warm-ups and outliers, are retained; each row is flushed
 outside the measurement so interruption leaves useful evidence.
@@ -99,7 +106,7 @@ Neither clock is overhead-subtracted or silently corrected.
 The included `xbox-benchmark.iso` is for hardware mode. To make an emulator ISO,
 put the same XBE plus an empty `XEMU.TXT` in a temporary folder and run nxdk's
 `extract-xiso -c folder emulator-benchmark.iso`, or use the provided
-`xbox-benchmark-xemu.iso` when present. Retrieve the guest CSV from the test HDD.
+`xbox-benchmark-xemu.iso` when present. Retrieve both guest CSVs and the validation JSON from the test HDD.
 Do not compare emulator guest TSC values to Xbox TSC as a speed measurement.
 
 ## Offline comparison
@@ -109,14 +116,18 @@ Stock-clock 64 MB consoles are the initial accepted baseline population; archive
 modified-console submissions separately rather than blending their results.
 
 ```
-python3 compare.py xbox.csv xemu.csv host.csv --package . \
+python3 compare_campaign.py xbox.csv xemu.csv host.csv --package . \
   --hardware-info hardware-info.json --xemu-info xemu-info.json > comparison.json
 ```
 
 The tool verifies the local XBE against the manifest, identical workload and
-executable identifiers, all 272 rows, seven distinct trials/case, independent
+executable identifiers, all 504 intervals, seven distinct measured trials plus a warm-up per case, independent
 CPU expected checksums, successful framebuffer checks, matching host session and
-complete positive timestamps. It reports **100 × Xbox median time / xemu host
+complete positive timestamps. Keep `<session>.csv`, `<session>.extended.csv` and
+`<session>.validation.json` together without editing/renaming them. Raw upstream
+failures/skips are never suppressed; any failed M2MF validation blocks all M2MF
+ratios conservatively. CPU replay failures block the corresponding replay ratio.
+The original independent kernels retain their own output checks. It reports **100 × Xbox median time / xemu host
 median time per case** only. No global or per-component average is produced.
 
 Cases shorter than 10 ms, smaller than 100 times the maximum empty-boundary cost,
@@ -138,35 +149,68 @@ clocks would still be misleading. The OSD remains unchanged and uncalibrated.
 
 For a future *estimated* workload model, collect broader independent suites:
 integer divide/latency/throughput, mixed scalar/SIMD, cache conflict/miss patterns,
-texture/shader/vertex/fill combinations, M2MF, readbacks and CPU/GPU contention.
+texture/shader/vertex/fill combinations, readbacks and CPU/GPU contention.
 Use held-out workloads and original-Xbox game traces for error validation; do
 not train and validate on the same cases. A finite one-session kit cannot supply
 all future measurements. This first package establishes a reusable collection
 and rejection protocol; it must not be advertised as a complete calibration.
 
-## Existing tools and technical references
+## Reuse of existing nxdk tests
 
-The supplied research report remains the architectural reference. Implementation
-was checked against primary source, without repeating the general research:
+Pilot 2 adds **11 CPU validation replays** and **18 M2MF transfer workloads**
+to the original 34 cases: **63 cases, 504 timed intervals** in one automatic run.
+The original **30 validation families** execute once with detailed JSON output.
+Warm-ups and failed results are retained, not filtered out.
 
-* [nxdk, pinned revision](https://github.com/XboxDev/nxdk/tree/03acd1415f7ccc3127bcfb629224aacdd95d783c):
-  open-source XBE toolchain, pbkit, FATX file APIs. `lib/winapi/profiling.c` uses
-  RDTSC for QueryPerformanceCounter, hence the separate host stopwatch.
-* [pbkit completion and submission](https://github.com/XboxDev/nxdk/blob/03acd1415f7ccc3127bcfb629224aacdd95d783c/lib/pbkit/pbkit.c):
-  `pb_busy` checks DMA GET against PUT and PGRAPH status. `pb_agp_access` supplies
-  the linear framebuffer view. No guessed register offsets are introduced.
-* Local `hw/xbox/nv2a/pgraph/pgraph.c`: WAIT_FOR_IDLE invokes surface download;
-  it is not merely a PFIFO submission counter.
-* [Roswell/xemu-test](https://github.com/xemu-project/xemu-test) and its CPU/M2MF
-  suites remain the functional regression tools; durations/suppressed failures
-  are not automatically performance references.
-* [nxdk_pgraph_tests](https://github.com/abaire/nxdk_pgraph_tests): reuse its
-  functional golden-image coverage when expanding GPU benchmarks. It does not
-  supply timing baselines for this new executable.
+* CPU source: [nxdk_low_level_cpu_tests at 702fe1b](https://github.com/abaire/nxdk_low_level_cpu_tests/tree/702fe1b6a61692104bdbb153034c266e2769c347),
+  the revision selected by the inspected Roswell CI release: 2 FPU, 5 MMX,
+  4 SSE families. Each timed sample replays a whole test 1,024 times (16,384 for basic FPU arithmetic) with
+  output disabled but checks and logging-argument construction intact. These
+  numbers describe **validation replay cost**, not isolated instruction latency
+  or CPU IPC. Original verbose `duration_ms` is diagnostic only.
+* GPU source: [nxdk_low_level_nv2a_tests at d80bff6](https://github.com/abaire/nxdk_low_level_nv2a_tests/tree/d80bff6d99cadda227739ee07f826c0803b6a4da),
+  the inspected CI M2MF revision. All 19 families retain original assertions:
+  alignment/odd sizes/phases, batching/causal chains, formats, framebuffer,
+  pitch/packing, line counts, minimum/zero transfers, notifier records/switching,
+  and system/video-memory transfers. Adversarial cases execute last because
+  they can rebind channel/notifier state. No Roswell FailureFilter is applied.
+* [pbkitplusplus at c3aa587](https://github.com/abaire/pbkitplusplus/tree/c3aa5879f1dd96743bf81128468780d8b59d42a7)
+  supplies the existing M2MF driver, submission helpers and notifier completion.
+  Timed workloads cross 4 KiB/64 KiB/1 MiB with linear/pitched/stride-2 layouts
+  and physical source/destination phases 0/8192 modulo 16 KiB. Each sample
+  copies 64 MiB total (16,384 / 1,024 / 64 completed transfers respectively). Original pattern/guard helpers validate source,
+  destination, padding and guards outside the interval. WB cache flushes also
+  stay outside it. Driver work, CPU submission, polling and memory contention
+  are included: this is **not pure NV2A shader throughput**.
+* The driver can silently fall back to CPU `memcpy`. A read-only accessor in the
+  generated driver exposes its actual native/fallback state; fallback results
+  are marked unavailable, never presented as GPU speed. A completion timeout
+  stops collection without freeing buffers that DMA might still own.
+* [nxdk](https://github.com/XboxDev/nxdk/tree/03acd1415f7ccc3127bcfb629224aacdd95d783c)
+  provides the open-source compiler support, pbkit and FATX APIs. Hardware TSC
+  is cross-checked with coarse ticks; xemu speed uses the separate host timer.
+
+`prepare_upstream.py` pins all sources, including the original printf library.
+It generates a catalog from the original runners and an adapted-source hash
+inventory, packaged with sources/licenses. Small build-only adapters unify the
+logger, add quiet replay/failure counting, expose native M2MF state, replace the
+fork's private framebuffer globals with public `pb_back_buffer()`, and extract
+only the existing M2MF declarations/helper from the large NV2A state header.
+The source checkouts and emulator algorithms are not modified.
+
+Other useful projects have different roles. The CPU project's Berkeley
+TestFloat/SoftFloat tests remain correctness oracles; timing the oracle together
+with the emulated instruction would not isolate CPU work. They are **not included**
+in this collection. [nxdk_pgraph_tests](https://github.com/abaire/nxdk_pgraph_tests)
+provides extensive rendering/golden-image cases, but needs separate image
+validation and carefully defined submission/completion intervals before reuse
+as timing workloads. Its rendering/texture/shader coverage is **not claimed** by
+this M2MF extension. PTIMER clock-manipulation tests are likewise not speed
+references. One run collects a reusable matrix, not every future GPU behavior.
 
 ## Building and tests
 
-See `build.sh`. nxdk is pinned; its submodules are fetched at the exact recorded
+See `build.sh`. nxdk and upstream test sources are pinned; its submodules are fetched at the exact recorded
 revisions. Build in an isolated nxdk checkout. Required tools: clang/LLVM/lld,
 make, cmake, flex, bison, Python 3. No proprietary SDK or console assets are shipped.
 Changing source/compiler/flags changes the executable identity; never silently
