@@ -38,5 +38,6 @@ jobs:
         with:
           name: xbox-benchmark-pilot
           path: tools/xbox-benchmark/package/
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 90
