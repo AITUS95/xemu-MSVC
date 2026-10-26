@@ -186,6 +186,95 @@ static inline void xemu_perf_nv2a_compare(XemuPerfResult *result,
     }
 }
 
+
+/*
+ * These bands describe host-thread pressure or short-term NV2A *trends*,
+ * never Xbox-hardware-relative speed. Unknown data stays uncolored.
+ */
+static inline enum XemuPerfRateBand
+xemu_perf_host_pressure_band(const XemuPerfResult *stats,
+                             enum XemuPerfThread component)
+{
+    if ((unsigned)component >= XEMU_PERF_THREADS ||
+        !stats->current.generation || !stats->ready ||
+        !stats->cpu_valid[component]) {
+        return XEMU_PERF_RATE_UNAVAILABLE;
+    }
+    double load = stats->cpu_percent[component];
+    if (!(load >= 0.0 && load <= DBL_MAX)) {
+        return XEMU_PERF_RATE_UNAVAILABLE;
+    }
+    if (load >= 90.0) {
+        return XEMU_PERF_RATE_SLOW; /* A host thread near saturation. */
+    }
+    if (load <= 60.0) {
+        return XEMU_PERF_RATE_FAST; /* Spare single-thread capacity. */
+    }
+    return XEMU_PERF_RATE_NORMAL;
+}
+
+enum XemuPerfTrendKind {
+    XEMU_PERF_TREND_PFIFO,
+    XEMU_PERF_TREND_FLIPS,
+    XEMU_PERF_TREND_STALLS,
+    XEMU_PERF_TREND_COUNT,
+};
+
+typedef struct XemuPerfTrend {
+    double reference;
+    unsigned samples;
+} XemuPerfTrend;
+
+/* Use only one call per *new* valid performance sample. */
+static inline enum XemuPerfRateBand
+xemu_perf_trend_band(XemuPerfTrend *trend, enum XemuPerfTrendKind kind,
+                     bool valid, double value)
+{
+    if ((unsigned)kind >= XEMU_PERF_TREND_COUNT || !valid ||
+        !(value >= 0.0 && value <= DBL_MAX)) {
+        return XEMU_PERF_RATE_UNAVAILABLE;
+    }
+
+    if (trend->samples == 0) {
+        trend->reference = value;
+        trend->samples = 1;
+        return XEMU_PERF_RATE_UNAVAILABLE;
+    }
+
+    double reference = trend->reference;
+    enum XemuPerfRateBand band = XEMU_PERF_RATE_UNAVAILABLE;
+    if (trend->samples >= 4) {
+        switch (kind) {
+        case XEMU_PERF_TREND_PFIFO:
+            if (reference >= 50000.0) {
+                band = value < reference * 0.70 ?
+                    XEMU_PERF_RATE_SLOW : XEMU_PERF_RATE_FAST;
+            }
+            break;
+        case XEMU_PERF_TREND_FLIPS:
+            if (reference >= 5.0) {
+                band = value < reference * 0.75 ?
+                    XEMU_PERF_RATE_SLOW : XEMU_PERF_RATE_FAST;
+            }
+            break;
+        case XEMU_PERF_TREND_STALLS:
+            /* Stall *entries* can be normal; red only on a sizable surge. */
+            band = value >= 12.0 && value > reference * 1.8 + 5.0 ?
+                XEMU_PERF_RATE_SLOW : XEMU_PERF_RATE_FAST;
+            break;
+        default:
+            break;
+        }
+    }
+
+    /* A slowly moving reference follows scene and game changes. */
+    trend->reference = reference + 0.07 * (value - reference);
+    if (trend->samples < 1000) {
+        trend->samples++;
+    }
+    return band;
+}
+
 /* Pure reducer: shared by the UI sampler and deterministic unit tests. */
 static inline XemuPerfResult xemu_perf_compare(const XemuPerfCounters *before,
                                                const XemuPerfCounters *after)
