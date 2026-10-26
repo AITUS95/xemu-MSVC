@@ -2,77 +2,70 @@
 SPDX-License-Identifier: GPL-2.0-or-later
 -->
 
-# Component performance overlay
+# Performance OSD
 
-Open **Debug > Component performance**. Close the window or uncheck the menu
-item to stop collecting measurements. The window remains visible when the menu
-bar hides and can be moved in windowed or fullscreen mode. This setting is
-session-only and defaults to off.
+Toggle **Debug > Performance OSD** to draw three compact rows directly over the
+video, including in fullscreen. The OSD uses ImGui's foreground draw list:
+there is no window, title bar, close button, background, focus or input target.
+Text is shadowed for contrast, anchored at the upper right below the menu bar,
+and shrinks to fit narrow viewports. It inherits the current UI font size.
+The session-only toggle defaults to off; disabling it stops collection.
 
-The display updates at most every 250 ms and averages over the last four
-sampling intervals (approximately one second). The actual interval length is
-used in every ratio. Initial samples, a UI stall longer than one second,
-pause/resume, reset, and snapshot load invalidate the previous window.
+## Emulation rate versus host utilization
 
-## What the numbers mean
+| Row | Rate field | Separate host field |
+| --- | --- | --- |
+| CPU speed | `N/D`: no calibrated Xbox execution-speed counter | vCPU thread CPU time / wall time |
+| NV2A speed | `N/D`: flips do not establish original-hardware speed | PFIFO thread CPU time / wall time |
+| APU @48kHz | Completed sample frames / (48,000 × elapsed seconds) | APU thread CPU time / wall time |
 
-| Row | Meaning of 100% |
-| --- | --- |
-| CPU | The vCPU host thread consumed one CPU-second per wall-clock second |
-| NV2A worker | The PFIFO host thread consumed one CPU-second per wall-clock second |
-| APU worker | The audio host thread consumed one CPU-second per wall-clock second |
-| Audio cadence | The APU completed 48,000 sample frames per wall-clock second |
-| Audio budget used | Audio frame work took as long as the audio duration produced |
-| VP / GP / EP | The phase's measured elapsed time occupied the entire wall-clock interval |
+The APU field measures **audio pipeline cadence**, not overall game speed,
+perceived playback speed or emulation accuracy. It is shown only with a valid,
+fresh window, an active pipeline and both GP and EP enabled in realtime mode.
+Limited or disabled DSP execution cannot earn a colored "100%". Configurations
+that legitimately use GP alone are conservatively `N/D` in this version.
 
-Thread CPU time is read with `GetThreadTimes` on Windows and a POSIX thread CPU
-clock on Linux. Unsupported hosts and failed clock reads show `N/A`. The NV2A
-row is CPU work in the submission thread, **not** GPU hardware utilization.
-Thread totals include driver/kernel work charged to that thread; CPU includes
-synchronous device work. They are not exclusive hardware-component profiles.
+Only the trusted APU rate percentage receives speed colors:
 
-Audio cadence counts completed APU frames multiplied by
-`NUM_SAMPLES_PER_FRAME`, with 48 kHz as the reference. Stereo channels are not
-counted twice. VP/GP/EP are timed around their existing execution scopes. EP's
-less frequent execution is naturally accumulated over the same window. Phase
-elapsed time includes descheduling and any waits inside the scope. Audio frame
-work excludes the separate pacing throttle. `Audio budget used` can exceed
-100%; it is not clamped.
+- Red below 95%.
+- White from 95% through 105%, inclusive.
+- Green above 105%.
 
-These figures do not measure Xbox hardware accuracy, completion of emulator
-development, or the speed of the whole game. A 30 FPS title is not automatically
-running at 50%. Limited DSP mode can maintain the audio cadence without
-executing the same DSP work as realtime mode; both modes are displayed.
+Labels, unavailable values, status and host percentages remain neutral gray.
+Host CPU percentages indicate consumption of one host core (100%), not Xbox
+speed. They are read using `GetThreadTimes` on Windows and a thread CPU clock
+on Linux; unsupported hosts/clock failures show `N/D`. NV2A host load is not
+physical GPU utilization. CPU work can include synchronous device operations.
 
-Do not add nested phase percentages to their parent or sum independent threads
-into a supposed overall emulation percentage. Physical GPU time and HDD, DVD,
-network, and USB metrics are deliberately `N/A` in this version.
+Do not infer CPU speed from QEMU virtual time, GPU speed from FPS/60, or global
+speed by averaging component percentages. A 30 FPS title is not automatically
+running at 50%. No guest execution, DSP budgets, clock or pacing policy is
+changed by this OSD. Existing audio budget and VP/GP/EP counters remain intact
+but are not displayed in the compact OSD.
 
-## Sampling and synchronization
+## Sampling and lifecycle
 
-All control operations and UI sampling run under the BQL. Device thread
-registrations are cleared before thread teardown. The APU publishes cumulative
-counters under a separate short-lived mutex; the sampler copies them and
-releases that mutex before calling host clock APIs or drawing ImGui. The
-telemetry mutex never acquires a device lock or the BQL.
+The existing collector updates at most every 250 ms, using four intervals
+(approximately one second) and actual elapsed time. Pause/resume, reset,
+snapshot restore, visibility changes and long UI stalls invalidate the window.
+Audio activity/mode transitions invalidate audio comparisons independently.
+Paused, collecting, inactive, stale and limited/off states show neutral `N/D`
+in place of an untrustworthy rate; host load remains separately available.
 
-A generation token prevents an in-flight frame from publishing into a new
-session after reset, pause, or a visibility change. Audio enable/mode changes
-also invalidate audio comparisons, even if the mode changes back between UI
-samples. Telemetry is not migrated or serialized into save states.
+Control/sampling run under the BQL. The APU publishes cumulative counters under
+a short-lived mutex; the sampler copies them before reading thread clocks or
+drawing. Generation tokens reject in-flight work across lifecycle transitions.
+Telemetry is not serialized into save states. An active pipeline with no
+completions for over one second is stale. If the UI itself blocks, it cannot
+refresh the OSD.
 
-`Paused`, `Collecting...`, `Inactive`, `Disabled`, and `Stale / no completions`
-are distinct states. A previously valid audio percentage is withdrawn if an
-active pipeline has not completed work for over one second. This timeout is
-checked when the UI can render; a blocked UI cannot refresh an overlay.
+## Tests
 
-## Validation
-
-`tests/unit/test-xemu-performance.c` tests the pure reducer and rolling window:
-48/24 kHz equivalents, thread CPU percentages, irregular intervals, budget
-values above 100%, zero/backward time, invalid clocks, stale/idle audio,
-mode changes, and generation changes. It is registered with the unit suite and
-can also be built independently:
+The existing `tests/unit/test-xemu-performance.c` covers rates, irregular
+intervals, values over 100%, stale/invalid samples and rolling-window resets.
+Its fourth TAP group checks the color boundaries (including exactly 95/105),
+invalid/non-finite rates, pause/warm-up/inactive/stale states, disabled/limited
+DSPs and independence from host utilization. It can also run standalone:
 
 ```sh
 cc -std=c11 -Wall -Wextra -Werror -pedantic -I. \
@@ -80,9 +73,7 @@ cc -std=c11 -Wall -Wextra -Werror -pedantic -I. \
 /tmp/test-xemu-performance
 ```
 
-Before promoting the draft, validate MSVC Debug/Release and Linux builds;
-exercise both Vulkan and OpenGL, 30/60 FPS software, fullscreen, idle audio,
-limited/realtime DSP, pause/resume, reset and snapshot loading. Compare thread
-percentages with an external profiler and compare frame times with the overlay
-enabled/disabled to quantify measurement overhead. The default-off path must
-not change emulated registers, timing policy, DSP execution budgets, or output.
+Before promoting the draft, validate the full MSVC/Linux emulator builds and
+real gameplay with OpenGL/Vulkan, fullscreen, DPI changes, pause/reset/snapshots
+and both DSP modes. Compare performance with the OSD on/off. CPU/NV2A speed
+remains unavailable until a trustworthy hardware-relative reference exists.

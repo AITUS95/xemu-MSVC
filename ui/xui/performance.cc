@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
-#include "common.hh"
+#include <algorithm>
+#include <cstdio>
+#include <imgui.h>
 #include "debug.hh"
-#include "viewport-manager.hh"
 
 extern "C" {
 #include "hw/xbox/performance.h"
@@ -9,18 +10,13 @@ extern "C" {
 
 bool performance_overlay_open;
 
-static void PercentageRow(const char *name, bool valid, double value,
-                          const char *unavailable)
+static void DrawOsdText(ImDrawList *draw, ImFont *font, float size, ImVec2 pos,
+                        ImU32 color, const char *text)
 {
-    ImGui::TableNextRow();
-    ImGui::TableNextColumn();
-    ImGui::TextUnformatted(name);
-    ImGui::TableNextColumn();
-    if (valid) {
-        ImGui::Text("%.1f%%", value);
-    } else {
-        ImGui::TextDisabled("%s", unavailable);
-    }
+    float shadow = size / 13.0f;
+    draw->AddText(font, size, ImVec2(pos.x + shadow, pos.y + shadow),
+                  IM_COL32(0, 0, 0, 255), text);
+    draw->AddText(font, size, pos, color, text);
 }
 
 void DrawPerformanceOverlay()
@@ -30,72 +26,83 @@ void DrawPerformanceOverlay()
         return;
     }
     XemuPerfResult stats = xemu_perf_sample();
-    bool running = runstate_is_running();
-    const char *unavailable = !running     ? "Paused" :
-                              !stats.ready ? "Collecting..." :
-                                             "N/A";
-    float scale = g_viewport_mgr.m_scale;
-    ImGui::SetNextWindowPos(ImVec2(15 * scale, 50 * scale),
-                            ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowBgAlpha(0.85f);
-    if (ImGui::Begin("Component performance", &performance_overlay_open,
-                     ImGuiWindowFlags_AlwaysAutoResize |
-                         ImGuiWindowFlags_NoCollapse)) {
-        ImGui::TextUnformatted("Host CPU time / wall time (100% = one core)");
-        if (ImGui::BeginTable("Host threads", 2)) {
-            static const char *names[] = { "CPU", "NV2A worker", "APU worker" };
-            for (unsigned i = 0; i < XEMU_PERF_THREADS; i++) {
-                PercentageRow(names[i], running && stats.cpu_valid[i],
-                              stats.cpu_percent[i], unavailable);
-            }
-            ImGui::EndTable();
-        }
-        ImGui::Separator();
-        const char *audio_status = unavailable;
-        if (running && stats.ready) {
-            audio_status = !stats.current.audio_active ? "Inactive" :
-                           stats.audio_stale ? "Stale / no completions" :
-                                               "Collecting...";
-        }
-        bool audio_valid = running && stats.audio_valid;
-        if (ImGui::BeginTable("Audio pipeline", 2)) {
-            PercentageRow("Audio cadence (48 kHz = 100%)", audio_valid,
-                          stats.audio_percent, audio_status);
-            PercentageRow("Audio budget used", audio_valid,
-                          stats.audio_budget_percent, audio_status);
-            ImGui::EndTable();
-        }
-        ImGui::TextUnformatted("Audio phase time / wall time (includes waits)");
-        if (ImGui::BeginTable("Audio phases", 2)) {
-            PercentageRow("VP", audio_valid, stats.phase_percent[XEMU_PERF_VP],
-                          audio_status);
-            PercentageRow("GP", audio_valid && stats.current.gp_enabled,
-                          stats.phase_percent[XEMU_PERF_GP],
-                          !running || !stats.ready  ? unavailable :
-                          !stats.current.gp_enabled ? "Disabled" :
-                                                      audio_status);
-            PercentageRow("EP", audio_valid && stats.current.ep_enabled,
-                          stats.phase_percent[XEMU_PERF_EP],
-                          !running || !stats.ready  ? unavailable :
-                          !stats.current.ep_enabled ? "Disabled" :
-                                                      audio_status);
-            ImGui::EndTable();
-        }
-        if (running && stats.ready && stats.current.audio_active) {
-            ImGui::Text("DSP mode: GP %s, EP %s",
-                        !stats.current.gp_enabled ? "off" :
-                        stats.current.gp_realtime ? "realtime" :
-                                                    "limited",
-                        !stats.current.ep_enabled ? "off" :
-                        stats.current.ep_realtime ? "realtime" :
-                                                    "limited");
-        }
-        ImGui::Separator();
-        ImGui::TextDisabled("GPU hardware / HDD / DVD / network / USB: N/A");
-        ImGui::TextDisabled(
-            "Host load and audio cadence are not Xbox accuracy.");
-        ImGui::TextDisabled("Do not add thread and nested phase percentages.");
+    bool running = stats.current.generation != 0;
+    enum XemuPerfRateBand band = xemu_perf_audio_rate_band(&stats);
+    const ImU32 neutral = IM_COL32(210, 210, 210, 255);
+    ImU32 rate_color = neutral;
+    switch (band) {
+    case XEMU_PERF_RATE_SLOW:
+        rate_color = IM_COL32(255, 0, 0, 255);
+        break;
+    case XEMU_PERF_RATE_NORMAL:
+        rate_color = IM_COL32(255, 255, 255, 255);
+        break;
+    case XEMU_PERF_RATE_FAST:
+        rate_color = IM_COL32(0, 255, 0, 255);
+        break;
+    default:
+        break;
     }
-    ImGui::End();
-    xemu_perf_set_enabled(performance_overlay_open);
+
+    const char *labels[] = { "CPU speed", "NV2A speed", "APU @48kHz" };
+    char rates[XEMU_PERF_THREADS][32] = { "N/D", "N/D", "N/D" };
+    char host[XEMU_PERF_THREADS][48];
+    if (band != XEMU_PERF_RATE_UNAVAILABLE) {
+        snprintf(rates[XEMU_PERF_APU], sizeof(rates[0]), "%.1f%%",
+                 stats.audio_percent);
+    }
+    for (unsigned i = 0; i < XEMU_PERF_THREADS; i++) {
+        if (running && stats.ready && stats.cpu_valid[i]) {
+            snprintf(host[i], sizeof(host[i]), "Host %.1f%%",
+                     stats.cpu_percent[i]);
+        } else {
+            snprintf(host[i], sizeof(host[i]), "Host N/D");
+        }
+    }
+    const char *status = "APU cadence only";
+    if (!running) {
+        status = "Paused";
+    } else if (!stats.ready) {
+        status = "Collecting...";
+    } else if (!stats.current.audio_active) {
+        status = "APU inactive";
+    } else if (stats.audio_stale) {
+        status = "APU data stale";
+    } else if (!stats.current.gp_enabled || !stats.current.ep_enabled ||
+               !stats.current.gp_realtime || !stats.current.ep_realtime) {
+        status = "APU DSP limited/off";
+    } else if (!stats.audio_valid) {
+        status = "APU collecting...";
+    }
+
+    ImGuiViewport *viewport = ImGui::GetMainViewport();
+    ImFont *font = ImGui::GetFont();
+    float size = ImGui::GetFontSize();
+    float label_width = 0, rate_width = 0, host_width = 0;
+    for (unsigned i = 0; i < XEMU_PERF_THREADS; i++) {
+        label_width = std::max(label_width, ImGui::CalcTextSize(labels[i]).x);
+        rate_width = std::max(rate_width, ImGui::CalcTextSize(rates[i]).x);
+        host_width = std::max(host_width, ImGui::CalcTextSize(host[i]).x);
+    }
+    float width = std::max(label_width + rate_width + host_width + 2 * size,
+                           ImGui::CalcTextSize(status).x);
+    float margin = std::min(size, viewport->Size.x / 8.0f);
+    if (viewport->Size.x <= 0 || viewport->Size.y <= 0) {
+        return;
+    }
+    float scale = std::min(1.0f, (viewport->Size.x - 2 * margin) / width);
+    ImVec2 pos(viewport->Pos.x + viewport->Size.x - margin - width * scale,
+               viewport->Pos.y + ImGui::GetFrameHeight() + size);
+    ImDrawList *draw = ImGui::GetForegroundDrawList();
+    for (unsigned i = 0; i < XEMU_PERF_THREADS; i++) {
+        DrawOsdText(draw, font, size * scale, pos, neutral, labels[i]);
+        DrawOsdText(draw, font, size * scale,
+                    ImVec2(pos.x + (label_width + size) * scale, pos.y),
+                    i == XEMU_PERF_APU ? rate_color : neutral, rates[i]);
+        DrawOsdText(draw, font, size * scale,
+                    ImVec2(pos.x + (label_width + rate_width + 2 * size) * scale,
+                           pos.y), neutral, host[i]);
+        pos.y += (size + 3) * scale;
+    }
+    DrawOsdText(draw, font, size * scale, pos, neutral, status);
 }

@@ -120,14 +120,79 @@ static void test_window_and_restart(void)
     assert(history.count == 1);
 }
 
+static void test_audio_rate_colors(void)
+{
+    XemuPerfCounters a = baseline(), b = a;
+    b.time_us += 1000000;
+    b.audio_updated_us = b.time_us;
+    b.sample_frames = 48000;
+    XemuPerfResult good = xemu_perf_compare(&a, &b);
+    const double values[] = { 0, 94.999, 95, 100, 105, 105.001, 150 };
+    const enum XemuPerfRateBand expected[] = {
+        XEMU_PERF_RATE_SLOW, XEMU_PERF_RATE_SLOW,
+        XEMU_PERF_RATE_NORMAL, XEMU_PERF_RATE_NORMAL, XEMU_PERF_RATE_NORMAL,
+        XEMU_PERF_RATE_FAST, XEMU_PERF_RATE_FAST,
+    };
+    for (unsigned i = 0; i < sizeof(values) / sizeof(values[0]); i++) {
+        good.audio_percent = values[i];
+        assert(xemu_perf_audio_rate_band(&good) == expected[i]);
+    }
+    const double invalid[] = { -1, NAN, INFINITY };
+    for (unsigned i = 0; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
+        good.audio_percent = invalid[i];
+        assert(xemu_perf_audio_rate_band(&good) == XEMU_PERF_RATE_UNAVAILABLE);
+    }
+    good.audio_percent = 100;
+    for (unsigned i = 0; i < 9; i++) {
+        XemuPerfResult bad = good;
+        switch (i) {
+        case 0:
+            bad.current.generation = 0;
+            break;
+        case 1:
+            bad.ready = false;
+            break;
+        case 2:
+            bad.audio_valid = false;
+            break;
+        case 3:
+            bad.current.audio_active = false;
+            break;
+        case 4:
+            bad.audio_stale = true;
+            break;
+        case 5:
+            bad.current.gp_enabled = false;
+            break;
+        case 6:
+            bad.current.ep_enabled = false;
+            break;
+        case 7:
+            bad.current.gp_realtime = false;
+            break;
+        case 8:
+            bad.current.ep_realtime = false;
+            break;
+        }
+        assert(xemu_perf_audio_rate_band(&bad) == XEMU_PERF_RATE_UNAVAILABLE);
+    }
+    /* Host utilization must never affect the audio rate classification. */
+    good.cpu_percent[0] = 10;
+    good.cpu_percent[1] = 150;
+    good.cpu_percent[2] = 0;
+    assert(xemu_perf_audio_rate_band(&good) == XEMU_PERF_RATE_NORMAL);
+}
+
 int main(void)
 {
-    puts("TAP version 13\n1..3");
+    puts("TAP version 13\n1..4");
     test_rates();
     puts("ok 1 - rates and irregular intervals");
     test_invalid_samples();
     puts("ok 2 - invalid and stale samples");
     test_window_and_restart();
     puts("ok 3 - rolling window and restart");
+    test_audio_rate_colors();
+    puts("ok 4 - trusted audio rate colors and unavailable states");
     return 0;
 }

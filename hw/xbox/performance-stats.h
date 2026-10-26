@@ -2,6 +2,7 @@
 #ifndef XEMU_PERFORMANCE_STATS_H
 #define XEMU_PERFORMANCE_STATS_H
 
+#include <float.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -54,6 +55,33 @@ typedef struct XemuPerfHistory {
     XemuPerfCounters samples[XEMU_PERF_HISTORY];
     unsigned count, next;
 } XemuPerfHistory;
+
+enum XemuPerfRateBand {
+    XEMU_PERF_RATE_UNAVAILABLE,
+    XEMU_PERF_RATE_SLOW,
+    XEMU_PERF_RATE_NORMAL,
+    XEMU_PERF_RATE_FAST,
+};
+
+/* A completed audio cadence is not a measurement of overall game speed. */
+static inline enum XemuPerfRateBand
+xemu_perf_audio_rate_band(const XemuPerfResult *stats)
+{
+    if (!stats->current.generation || !stats->ready || !stats->audio_valid ||
+        !stats->current.audio_active || stats->audio_stale ||
+        !stats->current.gp_enabled || !stats->current.ep_enabled ||
+        !stats->current.gp_realtime || !stats->current.ep_realtime ||
+        !(stats->audio_percent >= 0 && stats->audio_percent <= DBL_MAX)) {
+        return XEMU_PERF_RATE_UNAVAILABLE;
+    }
+    if (stats->audio_percent < 95.0) {
+        return XEMU_PERF_RATE_SLOW;
+    }
+    if (stats->audio_percent > 105.0) {
+        return XEMU_PERF_RATE_FAST;
+    }
+    return XEMU_PERF_RATE_NORMAL;
+}
 
 /* Pure reducer: shared by the UI sampler and deterministic unit tests. */
 static inline XemuPerfResult xemu_perf_compare(const XemuPerfCounters *before,
