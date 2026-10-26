@@ -4,8 +4,8 @@ SPDX-License-Identifier: GPL-2.0-or-later
 
 # Performance OSD
 
-Toggle **Debug > Performance OSD** to draw three compact rows directly over the
-video, including in fullscreen. The OSD uses ImGui's foreground draw list:
+Toggle **Debug > Performance OSD** to draw component and NV2A
+diagnostics directly over the video, including in fullscreen. The OSD uses ImGui's foreground draw list:
 there is no window, title bar, close button, background, focus or input target.
 Text is shadowed for contrast, anchored at the upper right below the menu bar,
 and shrinks to fit narrow viewports. It inherits the current UI font size.
