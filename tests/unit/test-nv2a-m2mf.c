@@ -33,6 +33,7 @@ int main(void)
             }
         }
     }
-    puts("M2MF bounds, overflow, strides, pitches and guards passed");
+    puts("TAP version 13\n1..1\n"
+         "ok 1 - M2MF bounds, overflow, strides, pitches and guards");
     return 0;
 }
