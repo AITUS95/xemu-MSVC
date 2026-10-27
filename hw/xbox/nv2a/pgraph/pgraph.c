@@ -26,6 +26,8 @@
 #include "ui/xemu-settings.h"
 #include "util.h"
 #include "swizzle.h"
+#include "m2mf.h"
+#include "qemu/log.h"
 #include "nv2a_vsh_emulator.h"
 
 #define PG_GET_MASK(reg, mask) GET_MASK(pgraph_reg_r(pg, reg), mask)
@@ -113,6 +115,10 @@ void pgraph_write(void *opaque, hwaddr addr, uint64_t val, unsigned int size)
                               NV_PGRAPH_SURFACE_READ_3D)+1)
                         % PG_GET_MASK(NV_PGRAPH_SURFACE,
                                    NV_PGRAPH_SURFACE_MODULO_3D) );
+            xemu_perf_nv2a_prepare(&d->pfifo.perf, xemu_perf_generation());
+            if (d->pfifo.perf.generation) {
+                d->pfifo.perf.flips++;
+            }
             nv2a_profile_increment();
             pfifo_kick(d);
         }
@@ -660,6 +666,108 @@ static unsigned int pgraph_texture_state_batch_end(unsigned int method)
     return 0;
 }
 
+/* Based on xemu-project/xemu#3052, with full-range checks and QEMU RAM
+ * write accounting. Unsupported requests remain pending rather than reporting
+ * successful partial copies; hardware fault/interrupt details need more tests.
+ */
+static uint8_t *pgraph_m2mf_map(NV2AState *d, hwaddr instance, hwaddr *size)
+{
+    hwaddr ramin_size = memory_region_size(&d->ramin);
+    if (instance > ramin_size || ramin_size - instance < 12) {
+        return NULL;
+    }
+    DMAObject dma = nv_dma_load(d, instance);
+    hwaddr address = dma.address & 0x07ffffff;
+    hwaddr vram_size = memory_region_size(d->vram);
+    if (address >= vram_size) {
+        return NULL;
+    }
+    *size = MIN((hwaddr)dma.limit + 1, vram_size - address);
+    return d->vram_ptr + address;
+}
+
+static void pgraph_m2mf_transfer(NV2AState *d)
+{
+    PGRAPHState *pg = &d->pgraph;
+    M2MFState *m = &pg->m2mf;
+    uint32_t stride_in = m->format & 0xff;
+    uint32_t stride_out = (m->format >> 8) & 0xff;
+    hwaddr src_size = 0, dst_size = 0, notify_size = 0;
+    uint8_t *src = NULL, *dst = NULL, *notify = NULL;
+    uint64_t src_span = 0, dst_span = 0;
+
+    /* Only the tested WRITE_ONLY notification mode is implemented. Do not
+     * silently coerce unsupported formats or fabricate hardware error codes. */
+    if (m->buf_notify != 0 || m->line_count > 2047 ||
+        (m->format & 0xffff0000)) {
+        goto unsupported;
+    }
+    if (m->dma_notify) {
+        notify = pgraph_m2mf_map(d, m->dma_notify, &notify_size);
+        if (!notify || notify_size < 0x20) {
+            goto unsupported;
+        }
+    }
+    if (m->line_count && m->line_length_in) {
+        src = pgraph_m2mf_map(d, m->dma_buffer_in, &src_size);
+        dst = pgraph_m2mf_map(d, m->dma_buffer_out, &dst_size);
+        if (!src || !dst || m->offset_in >= src_size ||
+            m->offset_out >= dst_size ||
+            !nv2a_m2mf_span(m->line_count, m->pitch_in, m->line_length_in,
+                            stride_in, src_size - m->offset_in, &src_span) ||
+            !nv2a_m2mf_span(m->line_count, m->pitch_out, m->line_length_in,
+                            stride_out, dst_size - m->offset_out, &dst_span)) {
+            goto unsupported;
+        }
+        src += m->offset_in;
+        dst += m->offset_out;
+        if (pg->renderer->ops.sync_region_for_transfer) {
+            pg->renderer->ops.surface_update(d, false, true, true);
+            pg->renderer->ops.sync_region_for_transfer(d, src - d->vram_ptr,
+                                                       src_span, false);
+            pg->renderer->ops.sync_region_for_transfer(d, dst - d->vram_ptr,
+                                                       dst_span, true);
+        }
+        /* VRAM aliases guest system RAM. map/unmap supplies code invalidation
+         * and migration dirty tracking as well as the renderer's dirty bits. */
+        hwaddr mapped_size = dst_span;
+        void *mapped =
+            cpu_physical_memory_map(dst - d->vram_ptr, &mapped_size, true);
+        if (mapped != dst || mapped_size != dst_span) {
+            if (mapped) {
+                cpu_physical_memory_unmap(mapped, mapped_size, false, 0);
+            }
+            goto unsupported;
+        }
+        nv2a_m2mf_copy(dst, src, m->line_count, m->line_length_in, m->pitch_in,
+                       m->pitch_out, stride_in, stride_out);
+        cpu_physical_memory_unmap(mapped, mapped_size, true, dst_span);
+    }
+    if (notify) {
+        if (pg->renderer->ops.sync_region_for_transfer) {
+            pg->renderer->ops.sync_region_for_transfer(
+                d, notify - d->vram_ptr + 0x10, 0x10, true);
+        }
+        /* The notifier is published only after all destination writes. */
+        uint32_t lo, hi;
+        do {
+            hi = ptimer_read(d, NV_PTIMER_TIME_1, 4);
+            lo = ptimer_read(d, NV_PTIMER_TIME_0, 4);
+        } while (hi != ptimer_read(d, NV_PTIMER_TIME_1, 4));
+        uint8_t record[16] = { 0 };
+        stl_le_p(record, lo);
+        stl_le_p(record + 4, hi);
+        cpu_physical_memory_write(notify - d->vram_ptr + 0x10, record, 12);
+        smp_wmb();
+        cpu_physical_memory_write(notify - d->vram_ptr + 0x1c, record + 12, 4);
+    }
+    return;
+
+unsupported:
+    qemu_log_mask(LOG_UNIMP, "NV039: unsupported transfer or DMA footprint; "
+                             "completion withheld\n");
+}
+
 int pgraph_method(NV2AState *d, unsigned int subchannel,
                    unsigned int method, uint32_t parameter,
                    uint32_t *parameters, size_t num_words_available,
@@ -676,6 +784,7 @@ int pgraph_method(NV2AState *d, unsigned int subchannel,
     ContextSurfaces2DState *context_surfaces_2d = &pg->context_surfaces_2d;
     ImageBlitState *image_blit = &pg->image_blit;
     BetaState *beta = &pg->beta;
+    M2MFState *m2mf = &pg->m2mf;
 
     assert(subchannel < 8);
 
@@ -735,6 +844,52 @@ int pgraph_method(NV2AState *d, unsigned int subchannel,
                 // hardware.
                 beta->beta = parameter & 0x7f800000;
             }
+            break;
+        default:
+            goto unhandled;
+        }
+        break;
+    }
+    case NV_MEMORY_TO_MEMORY_FORMAT: {
+        switch (method) {
+        case NV039_SET_OBJECT:
+            m2mf->object_instance = parameter;
+            break;
+        case NV039_NO_OPERATION:
+            break;
+        case NV039_SET_CONTEXT_DMA_NOTIFIES:
+            m2mf->dma_notify = parameter;
+            break;
+        case NV039_SET_CONTEXT_DMA_BUFFER_IN:
+            m2mf->dma_buffer_in = parameter;
+            break;
+        case NV039_SET_CONTEXT_DMA_BUFFER_OUT:
+            m2mf->dma_buffer_out = parameter;
+            break;
+        case NV039_OFFSET_IN:
+            m2mf->offset_in = parameter;
+            break;
+        case NV039_OFFSET_OUT:
+            m2mf->offset_out = parameter;
+            break;
+        case NV039_PITCH_IN:
+            m2mf->pitch_in = parameter;
+            break;
+        case NV039_PITCH_OUT:
+            m2mf->pitch_out = parameter;
+            break;
+        case NV039_LINE_LENGTH_IN:
+            m2mf->line_length_in = parameter;
+            break;
+        case NV039_LINE_COUNT:
+            m2mf->line_count = parameter;
+            break;
+        case NV039_FORMAT:
+            m2mf->format = parameter;
+            break;
+        case NV039_BUFFER_NOTIFY:
+            m2mf->buf_notify = parameter;
+            pgraph_m2mf_transfer(d);
             break;
         default:
             goto unhandled;

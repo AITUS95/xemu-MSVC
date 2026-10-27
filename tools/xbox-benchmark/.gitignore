@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+*.obj
+*.c.d
+*.exe
+*.iso
+bin/
+package/
+__pycache__/
+*.zip
+.upstream/
+generated/
+generated.mk
+*.cpp.d

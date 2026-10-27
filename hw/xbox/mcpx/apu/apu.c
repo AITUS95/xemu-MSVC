@@ -20,6 +20,7 @@
  */
 
 #include "apu_int.h"
+#include "hw/xbox/performance.h"
 
 MCPXAPUState *g_state; // Used via debug handlers
 
@@ -244,14 +245,18 @@ static void se_frame(MCPXAPUState *d)
     /* Buffer for all mixbins for this frame */
     float mixbins[NUM_MIXBINS][NUM_SAMPLES_PER_FRAME] = { 0 };
 
+    XemuPerfAudioFrame perf = xemu_perf_audio_begin();
+    int64_t vp_start = xemu_perf_audio_clock(&perf);
     mcpx_apu_vp_frame(d, mixbins);
-    mcpx_apu_dsp_frame(d, mixbins);
+    perf.phase_us[XEMU_PERF_VP] = xemu_perf_audio_clock(&perf) - vp_start;
+    mcpx_apu_dsp_frame(d, mixbins, &perf);
     mcpx_apu_monitor_frame(d);
 
     d->ep_frame_div++;
     d->frame_work_acc_us += qemu_clock_get_us(QEMU_CLOCK_REALTIME) - start_us;
 
     mcpx_debug_end_frame();
+    xemu_perf_audio_end(&perf, NUM_SAMPLES_PER_FRAME);
 }
 
 static void *mcpx_apu_frame_thread(void *arg)
@@ -291,6 +296,7 @@ static void *mcpx_apu_frame_thread(void *arg)
         if (xcntmode == NV_PAPU_SECTL_XCNTMODE_OFF ||
             (fectl & NV_PAPU_FECTL_FEMETHMODE_TRAPPED) ||
             (fectl & NV_PAPU_FECTL_FEMETHMODE_HALTED)) {
+            xemu_perf_audio_idle();
             qemu_cond_timedwait(&d->cond, &d->lock, 5);
             continue;
         }
@@ -332,6 +338,8 @@ static void mcpx_apu_reset_locked(MCPXAPUState *d)
 static void mcpx_apu_reset_hold(Object *obj, ResetType type)
 {
     MCPXAPUState *d = MCPX_APU_DEVICE(obj);
+
+    xemu_perf_invalidate();
 
     bql_unlock();
     qemu_mutex_lock(&d->lock);
@@ -429,11 +437,14 @@ static void mcpx_apu_realize(PCIDevice *dev, Error **errp)
                        d, QEMU_THREAD_JOINABLE);
     mcpx_apu_wait_for_idle(d);
     qemu_mutex_unlock(&d->lock);
+    xemu_perf_set_thread(XEMU_PERF_APU, &d->apu_thread);
 }
 
 static void mcpx_apu_exitfn(PCIDevice *dev)
 {
     MCPXAPUState *d = MCPX_APU_DEVICE(dev);
+
+    xemu_perf_set_thread(XEMU_PERF_APU, NULL);
 
     bql_unlock();
     qemu_mutex_lock(&d->lock);

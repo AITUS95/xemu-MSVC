@@ -56,6 +56,7 @@
 #include "hw/xbox/mcpx/apu/apu.h"
 
 #include "hw/xbox/xbox.h"
+#include "hw/xbox/performance.h"
 #include "smbus.h"
 
 #define MAX_IDE_BUS 2
@@ -241,6 +242,7 @@ void xbox_init_common(MachineState *machine,
     PCIBus *agp_bus;
 
     x86_cpus_init(x86ms, pcmc->default_cpu_version);
+    xemu_perf_init();
 
     if (kvm_enabled()) {
         kvmclock_create(pcmc->kvmclock_create_always);

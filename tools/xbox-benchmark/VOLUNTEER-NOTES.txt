@@ -1,0 +1,16 @@
+SPDX-License-Identifier: GPL-2.0-or-later
+
+Xbox benchmark pilot 2 — include with both unedited CSVs and the validation JSON
+
+Collector alias (no real name required):
+Console revision (1.0–1.6, or unknown):
+64 MB RAM or modification:
+CPU/GPU stock clocks? Any hardware upgrade/overclock:
+BIOS/kernel version if known (name/version only; do not upload BIOS):
+Video region/cable:
+Package SHA-256 / download identifier:
+Completed, FAILED or hung? Last screen message:
+Approximate run duration and any unusual conditions:
+
+Do not include serial numbers, EEPROM, keys or disk images.
+One ordinary automatic run is enough for the pilot; retain all files and failures.

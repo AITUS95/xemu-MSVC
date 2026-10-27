@@ -1,0 +1,47 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+name: Xbox benchmark pilot
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/component-performance-overlay]
+    paths:
+      - 'tools/xbox-benchmark/**'
+      - 'hw/xbox/benchmark*'
+      - 'hw/xbox/nv2a/pgraph/m2mf.h'
+      - 'tests/unit/test-nv2a-m2mf.c'
+      - 'tests/unit/test-xemu-benchmark.c'
+      - '.github/workflows/xbox-benchmark.yml'
+permissions:
+  contents: read
+jobs:
+  pilot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install open-source toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm lld make cmake flex bison
+      - name: Test comparison and marker validity
+        run: |
+          python3 -m unittest discover -s tools/xbox-benchmark -v
+          python3 tools/xbox-benchmark/verify_kernels.py
+          cc -std=c11 -Wall -Wextra -Werror -pedantic -I. tests/unit/test-xemu-benchmark.c -o /tmp/test-xemu-benchmark
+          /tmp/test-xemu-benchmark
+          cc -std=c11 -Wall -Wextra -Werror -pedantic -I. tests/unit/test-xemu-performance.c -o /tmp/test-xemu-performance
+          /tmp/test-xemu-performance
+          cc -std=c11 -Wall -Wextra -Werror -pedantic -I. tests/unit/test-nv2a-m2mf.c -o /tmp/test-nv2a-m2mf
+          /tmp/test-nv2a-m2mf
+      - name: Build XBE and package
+        env:
+          NXDK_DIR: ${{ runner.temp }}/nxdk
+          JOBS: '4'
+        run: tools/xbox-benchmark/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xbox-benchmark-pilot
+          path: tools/xbox-benchmark/package/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 90
