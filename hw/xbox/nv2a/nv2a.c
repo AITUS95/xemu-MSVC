@@ -309,6 +309,7 @@ static void nv2a_reset(NV2AState *d)
 
     memset(d->pfifo.regs, 0, sizeof(d->pfifo.regs));
     memset(d->pgraph.regs_, 0, sizeof(d->pgraph.regs_));
+    memset(&d->pgraph.m2mf, 0, sizeof(d->pgraph.m2mf));
     memset(d->pvideo.regs, 0, sizeof(d->pvideo.regs));
 
     d->pcrtc.start = 0;
@@ -434,6 +435,7 @@ static int nv2a_pre_load(void *opaque)
 {
     NV2AState *d = opaque;
     nv2a_lock_fifo(d);
+    memset(&d->pgraph.m2mf, 0, sizeof(d->pgraph.m2mf));
     return 0;
 }
 
@@ -453,6 +455,34 @@ const VMStateDescription vmstate_nv2a_pgraph_vertex_attributes = {
         // FIXME
         VMSTATE_END_OF_LIST()
     }
+};
+
+/* Keep the parent layout compatible with existing version-4 snapshots. */
+static bool nv2a_m2mf_state_needed(void *opaque)
+{
+    return true;
+}
+
+static const VMStateDescription vmstate_nv2a_m2mf = {
+    .name = "nv2a/m2mf",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = nv2a_m2mf_state_needed,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT64(pgraph.m2mf.object_instance, NV2AState),
+        VMSTATE_UINT64(pgraph.m2mf.dma_notify, NV2AState),
+        VMSTATE_UINT64(pgraph.m2mf.dma_buffer_in, NV2AState),
+        VMSTATE_UINT64(pgraph.m2mf.dma_buffer_out, NV2AState),
+        VMSTATE_UINT64(pgraph.m2mf.offset_in, NV2AState),
+        VMSTATE_UINT64(pgraph.m2mf.offset_out, NV2AState),
+        VMSTATE_UINT32(pgraph.m2mf.pitch_in, NV2AState),
+        VMSTATE_UINT32(pgraph.m2mf.pitch_out, NV2AState),
+        VMSTATE_UINT32(pgraph.m2mf.line_length_in, NV2AState),
+        VMSTATE_UINT32(pgraph.m2mf.line_count, NV2AState),
+        VMSTATE_UINT32(pgraph.m2mf.format, NV2AState),
+        VMSTATE_UINT32(pgraph.m2mf.buf_notify, NV2AState),
+        VMSTATE_END_OF_LIST()
+    },
 };
 
 static const VMStateDescription vmstate_nv2a = {
@@ -581,6 +611,10 @@ static const VMStateDescription vmstate_nv2a = {
         VMSTATE_UINT64_V(ptimer.time_offset, NV2AState, 4),
         VMSTATE_TIMER_V(ptimer.timer, NV2AState, 4),
         VMSTATE_END_OF_LIST()
+    },
+    .subsections = (const VMStateDescription * const[]) {
+        &vmstate_nv2a_m2mf,
+        NULL
     },
 };
 

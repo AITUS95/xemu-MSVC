@@ -7,6 +7,8 @@ on:
     paths:
       - 'tools/xbox-benchmark/**'
       - 'hw/xbox/benchmark*'
+      - 'hw/xbox/nv2a/pgraph/m2mf.h'
+      - 'tests/unit/test-nv2a-m2mf.c'
       - 'tests/unit/test-xemu-benchmark.c'
       - '.github/workflows/xbox-benchmark.yml'
 permissions:
@@ -29,6 +31,8 @@ jobs:
           /tmp/test-xemu-benchmark
           cc -std=c11 -Wall -Wextra -Werror -pedantic -I. tests/unit/test-xemu-performance.c -o /tmp/test-xemu-performance
           /tmp/test-xemu-performance
+          cc -std=c11 -Wall -Wextra -Werror -pedantic -I. tests/unit/test-nv2a-m2mf.c -o /tmp/test-nv2a-m2mf
+          /tmp/test-nv2a-m2mf
       - name: Build XBE and package
         env:
           NXDK_DIR: ${{ runner.temp }}/nxdk

@@ -25,6 +25,7 @@ tests = {
   'test-x86-topo': [],
   'test-xemu-performance': [],
   'test-xemu-benchmark': [],
+  'test-nv2a-m2mf': [],
   'test-cutils': [],
   'test-div128': [],
   'test-shift128': [],
