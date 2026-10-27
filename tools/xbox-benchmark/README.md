@@ -7,6 +7,11 @@ This is an **experimental collection kit**, not a calibrated CPU/GPU speed meter
 Use a small pilot group first. A successful build is not proof that the XBE works
 on every original Xbox revision. Keep failed/partial runs too.
 
+The current revision implements the missing NV2A class-0x39 transfer path in
+xemu and adds probe/timeout/storage diagnostics to the XBE. See [M2MF.md](M2MF.md)
+for the cause, upstream attribution, supported behavior and hardware-pilot limits.
+An older xemu build still cannot execute native M2MF, even with the new ISO.
+
 ## Volontari: istruzioni semplici
 
 1. Serve una **Xbox originale capace di avviare homebrew**, preferibilmente con

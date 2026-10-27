@@ -29,6 +29,7 @@ package.mkdir()
 for name in (
     "README.md",
     "VALIDATION.md",
+    "M2MF.md",
     "VOLUNTEER-NOTES.txt",
     "compare.py",
     "compare_campaign.py",

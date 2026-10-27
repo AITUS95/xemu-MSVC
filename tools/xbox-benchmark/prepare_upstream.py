@@ -84,7 +84,7 @@ def prepare():
     log = replace_once(
         log,
         "namespace {",
-        "namespace {\nstatic bool bench_quiet;\nstatic unsigned bench_failures;",
+        "namespace {\nstatic bool bench_quiet;\nstatic unsigned bench_failures;\nstatic bool bench_io_ok = true;",
     )
     for anchor in (
         "void Event(Level level, const char* file, int line, const LogFields& fields,\n           const char* fmt, ...) {\n  char buf[kMaxMessageLength];",
@@ -105,7 +105,20 @@ def prepare():
         else:
             new = anchor + "\n  if (bench_quiet) return;"
         log = replace_once(log, anchor, new)
+    log = replace_once(
+        log,
+        "  file << text;",
+        "  file << text;\n  file.flush();\n"
+        "  if (!file) bench_io_ok = false;",
+    )
+    log = replace_once(
+        log,
+        '    DbgPrint("Failed to open log file %s for append\\n",',
+        "    bench_io_ok = false;\n"
+        '    DbgPrint("Failed to open log file %s for append\\n",',
+    )
     log += (
+        '\nextern "C" bool bench_log_io_ok() { return bench_io_ok; }\n'
         '\nextern "C" void bench_log_mode(bool quiet) { '
         "bench_quiet = quiet; bench_failures = 0; }\n"
         'extern "C" unsigned bench_log_failures() { return bench_failures; }\n'
@@ -132,9 +145,35 @@ def prepare():
         + "\n};\n}\n"
     )
     driver = pb / "third_party/gpu_m2m.cpp"
+    text = driver.read_text()
+    text = replace_once(
+        text,
+        "static bool g_fallback_to_memcpy = false;",
+        "static bool g_fallback_to_memcpy = false;\n"
+        "static int bench_probe_result = -1;\n"
+        "static uint32_t bench_probe_actual;",
+    )
+    text = replace_once(
+        text,
+        "    uint32_t *test_src = (uint32_t *)(data);",
+        "    if (!data) {\n"
+        "        bench_probe_result = -2;\n"
+        "        g_fallback_to_memcpy = true;\n"
+        "        return false;\n    }\n"
+        "    uint32_t *test_src = (uint32_t *)(data);",
+    )
+    text = replace_once(
+        text,
+        "    int res = gpum_wait();",
+        "    int res = gpum_wait();\n"
+        "    bench_probe_result = res;\n"
+        "    bench_probe_actual = *test_dst;",
+    )
     driver.write_text(
-        driver.read_text() + '\nextern "C" bool bench_native_m2mf() { '
+        text + '\nextern "C" bool bench_native_m2mf() { '
         "return g_notif && !g_fallback_to_memcpy; }\n"
+        'extern "C" void bench_m2mf_probe(int *result, uint32_t *actual) { '
+        "*result = bench_probe_result; *actual = bench_probe_actual; }\n"
     )
     fb = nv / "m2mf_tests/test_m2mf_framebuffer.cpp"
     text = (

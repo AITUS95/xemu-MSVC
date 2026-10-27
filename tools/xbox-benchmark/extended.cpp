@@ -12,6 +12,8 @@
 extern "C" void bench_log_mode(bool quiet);
 extern "C" unsigned bench_log_failures();
 extern "C" bool bench_native_m2mf();
+extern "C" bool bench_log_io_ok();
+extern "C" void bench_m2mf_probe(int *result, uint32_t *actual);
 
 extern "C" void _putchar(char c)
 {
@@ -40,6 +42,14 @@ static bool validate(const UpstreamCase &c, bool available)
     bench_log_mode(false);
     TestLog::BeginTest(c.id, c.source);
     bool ok = false;
+    if (!c.cpu) {
+        int result;
+        uint32_t actual;
+        bench_m2mf_probe(&result, &actual);
+        TEST_INFO_EX(TestFields("native", available, "probe_result", result,
+                                "probe_actual", Hex32(actual)),
+                     "Initial M2MF probe; expected copied value 0xA55A1234");
+    }
     if (available) {
         ok = c.run();
     } else {
@@ -123,9 +133,18 @@ static bool m2mf_case(FILE *out, unsigned bytes, unsigned layout,
             } else {
                 gpum_start(dst, src, bytes);
             }
-            if (gpum_wait() != 0) {
-                /* DMA may still own the allocation. Stop without freeing it. */
-                bench_end(seq);
+            int wait_result = gpum_wait();
+            if (wait_result != 0) {
+                /* DMA may still own the allocation. Preserve the failure and
+                 * stop without freeing it or claiming completed work. */
+                uint64_t end = bench_end(seq);
+                DWORD elapsed = GetTickCount();
+                elapsed -= ticks;
+                record(out, seq, id, trial, loops, bytes, layout, phase, start,
+                       end, elapsed, false, 1, true);
+                fprintf(out, "# aborted: wait_result=%d completed_copies=%u\n",
+                        wait_result, n);
+                fflush(out);
                 return false;
             }
         }
@@ -213,7 +232,10 @@ bool bench_extended_run(const char *base_path, const char *header)
     }
     if (complete) {
         TestLog::EndSuite(passed, 30 - passed);
-        fputs("# complete\n", out);
+        complete = bench_log_io_ok();
+        if (complete) {
+            fputs("# complete\n", out);
+        }
     }
     bool saved = !ferror(out);
     saved = fclose(out) == 0 && saved;

@@ -7,7 +7,35 @@ This is an experimental collection package, not an original-Xbox baseline.
 The PR description records the downloadable CI artifact and its final runtime
 validation separately; archive that exact artifact, manifest and source.
 
-## Checks performed
+## M2MF follow-up
+
+The missing class-0x39 implementation was adapted from upstream PR #3052. See
+[M2MF.md](M2MF.md) for changes and explicitly unsupported cases.
+
+- Full Linux builds with OpenGL and Vulkan enabled succeeded.
+- The **unchanged published PILOT 2 XBE** was tested with the new implementation:
+  all 18 M2MF workloads and all 19 original NV2A validation families passed in
+  OpenGL/Mesa llvmpipe. No forced native flag or guest memcpy fallback.
+- The revised diagnostic XBE also completed on **Vulkan / RTX 5080 Laptop GPU**
+  using PRIME offload: 504 guest/host intervals, all base output checks passed,
+  all 144 M2MF trials (including warm-ups) passed with native=1, all 19 NV2A
+  validation families passed. The initial probe returned zero and copied
+  0xA55A1234. The three known CPU failures remain: total **27 pass / 3 fail**.
+- An Xvfb run combining Mesa OpenGL presentation with NVIDIA Vulkan failed at
+  display interop initialization, before guest intervals; the successful RTX
+  run used the real X display with PRIME for both APIs. That failed attempt is
+  not counted as Vulkan validation.
+- New native M2MF unit checks exercise exact bounds, short buffers, zero work,
+  zero increments, 64-bit footprint overflow, asymmetric strides, pitches and
+  untouched guard/padding bytes. Passed normally and with ASan/UBSan.
+- Cold snapshot smoke test passed: load a version-4 snapshot made by the old
+  emulator, save/load a new snapshot containing the M2MF subsection, then reset.
+  This does not establish in-flight transfer/context-switch snapshot coverage.
+- Existing benchmark/performance C tests passed again (one plus seven groups).
+- The 21 existing Python comparison/rejection tests still pass. The downloadable
+  artifact's final identity and smoke-test results are recorded on the PR.
+
+## Earlier PILOT 2 checks (before M2MF implementation)
 
 - XBE and hardware/xemu ISO variants built with pinned nxdk and upstream sources.
   Application C/C++ compiles with `-Wall -Wextra -Werror`; upstream SDK/libc++
@@ -45,10 +73,11 @@ The combined JSON summary counts unavailable cases as failures (8 passed,
 CPU failures from the nineteen unavailable M2MF checks. COMPLETE means the
 collection finished, not that all checks passed.
 
-## Still unvalidated
+## Remaining hardware/coverage limits
 
-No real Xbox boot/timing baseline, all console revisions/video modes, successful
-native M2MF execution/guard checks, or broad rendering/shader/texture coverage.
+No real Xbox boot/timing baseline, all console revisions/video modes, or broad
+rendering/shader/texture coverage. Native emulated M2MF is now validated as above;
+that is not verification of the new XBE on a physical Xbox.
 A small hardware pilot is needed before community-wide distribution. Cases
 that remain too short/noisy are diagnostic only. Compiler changes create new
 binary identities: never mix packages, even if they have the same suite name.
