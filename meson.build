@@ -2476,7 +2476,7 @@ elif get_option('vulkan').enabled()
 endif
 
 if vulkan.found()
-  libglslang = dependency('glslang', version: '>=15.0.0', required: false)
+  libglslang = dependency('glslang', version: '>=15.1.0', required: false)
   if not libglslang.found()
     # FIXME: Get spirv-tools to enable opt.
     glslang_opts = cmake.subproject_options()

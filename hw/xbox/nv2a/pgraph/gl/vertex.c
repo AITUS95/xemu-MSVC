@@ -20,6 +20,7 @@
  */
 
 #include "hw/xbox/nv2a/nv2a_regs.h"
+#include "hw/xbox/nv2a/debug_gl.h"
 #include <hw/xbox/nv2a/nv2a_int.h>
 #include "system/memory.h"
 #include "debug.h"
@@ -352,7 +353,7 @@ void pgraph_gl_init_buffers(NV2AState *d)
     memset(r->gl_vertex_attrib_pointer, 0,
            sizeof(r->gl_vertex_attrib_pointer));
 
-    assert(glGetError() == GL_NO_ERROR);
+    ASSERT_NO_GL_ERROR();
 }
 
 void pgraph_gl_finalize_buffers(PGRAPHState *pg)
